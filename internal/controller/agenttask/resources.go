@@ -56,6 +56,7 @@ func (r *Reconciler) buildPod(task *agentsv1alpha1.AgentTask) *corev1.Pod {
 		Spec: corev1.PodSpec{
 			RestartPolicy:         corev1.RestartPolicyNever,
 			ActiveDeadlineSeconds: &deadline,
+			ImagePullSecrets:      r.imagePullSecrets(),
 			Containers: []corev1.Container{
 				{
 					Name:  "agent",
@@ -85,6 +86,14 @@ func (r *Reconciler) buildPod(task *agentsv1alpha1.AgentTask) *corev1.Pod {
 			},
 		},
 	}
+}
+
+// imagePullSecrets returns the configured pull secret reference, if any.
+func (r *Reconciler) imagePullSecrets() []corev1.LocalObjectReference {
+	if r.cfg.ImagePullSecret == "" {
+		return nil
+	}
+	return []corev1.LocalObjectReference{{Name: r.cfg.ImagePullSecret}}
 }
 
 // buildService renders the headless-addressable Service in front of the pod so

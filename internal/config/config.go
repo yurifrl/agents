@@ -28,6 +28,10 @@ type Config struct {
 	// wholesale into every agent pod.
 	SecretName string `mapstructure:"secret_name"`
 
+	// ImagePullSecret, when set, is added to each agent pod's imagePullSecrets so
+	// it can pull a private image (e.g. the ghcr pull secret).
+	ImagePullSecret string `mapstructure:"image_pull_secret"`
+
 	// MaxConcurrent caps simultaneously-running ephemeral pods (0 = unlimited).
 	MaxConcurrent int `mapstructure:"max_concurrent"`
 
@@ -91,6 +95,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("namespace", "agents")
 	v.SetDefault("agent_image", "ghcr.io/yurifrl/agents:latest")
 	v.SetDefault("secret_name", "agents")
+	v.SetDefault("image_pull_secret", "")
 	v.SetDefault("max_concurrent", 0)
 	v.SetDefault("restart_budget", 3)
 	v.SetDefault("default_deadline_seconds", 3600)
@@ -109,6 +114,7 @@ func bindEnv(v *viper.Viper) {
 		"namespace",
 		"agent_image",
 		"secret_name",
+		"image_pull_secret",
 		"max_concurrent",
 		"restart_budget",
 		"default_deadline_seconds",
