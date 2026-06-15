@@ -1,0 +1,16 @@
+apiVersion: agents.yurifrl.dev/v1alpha1
+kind: AgentTask
+metadata:
+  name: worker-add-doc
+  namespace: agents
+spec:
+  type: worker
+  owner: yuri
+  repo: yurifrl/agents
+  output: pr
+  runtime: adk
+  lifecycle: ephemeral
+  prompt: >-
+    Create a file docs/HELLO_FROM_AGENT.md with a short markdown note:
+    a title, and 3 bullet points describing what the yurifrl/agents project does.
+    Keep it concise.

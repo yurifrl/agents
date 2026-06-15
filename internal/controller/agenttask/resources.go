@@ -47,6 +47,11 @@ func (r *Reconciler) buildPod(task *agentsv1alpha1.AgentTask) *corev1.Pod {
 		runtime = agentsv1alpha1.RuntimeADK
 	}
 
+	output := task.Spec.Output
+	if output == "" {
+		output = agentsv1alpha1.OutputResponse
+	}
+
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName(task),
@@ -74,6 +79,7 @@ func (r *Reconciler) buildPod(task *agentsv1alpha1.AgentTask) *corev1.Pod {
 						{Name: "AGENT_OWNER", Value: task.Spec.Owner},
 						{Name: "AGENT_PROMPT", Value: task.Spec.Prompt},
 						{Name: "AGENT_REPO", Value: task.Spec.Repo},
+						{Name: "AGENT_OUTPUT", Value: string(output)},
 					},
 					EnvFrom: []corev1.EnvFromSource{
 						{

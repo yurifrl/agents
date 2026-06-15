@@ -74,6 +74,15 @@ spec:
                 - ephemeral
                 - persistent
                 type: string
+              output:
+                default: response
+                description: 'Output is the externalization contract: response (default),
+                  commit, or pr.'
+                enum:
+                - response
+                - commit
+                - pr
+                type: string
               owner:
                 description: |-
                   Owner is the durable identity that owns this task (e.g. "yuri").
@@ -87,7 +96,7 @@ spec:
               repo:
                 description: |-
                   Repo is the git repository the agent operates on (for pr/commit outputs).
-                  Optional for response-only agents.
+                  Accepts "owner/repo" or a full https URL. Optional for response-only agents.
                 type: string
               runtime:
                 default: adk

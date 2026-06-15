@@ -4,6 +4,19 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// Output is the externalization contract for a finished run.
+// +kubebuilder:validation:Enum=response;commit;pr
+type Output string
+
+const (
+	// OutputResponse returns the agent's final text (no git side effects).
+	OutputResponse Output = "response"
+	// OutputCommit pushes a branch with the changes but opens no PR.
+	OutputCommit Output = "commit"
+	// OutputPR pushes a branch and opens a pull request.
+	OutputPR Output = "pr"
+)
+
 // Runtime selects how the agent is executed inside the pod.
 // +kubebuilder:validation:Enum=adk;pi
 type Runtime string
@@ -51,9 +64,14 @@ type AgentTaskSpec struct {
 	Prompt string `json:"prompt"`
 
 	// Repo is the git repository the agent operates on (for pr/commit outputs).
-	// Optional for response-only agents.
+	// Accepts "owner/repo" or a full https URL. Optional for response-only agents.
 	// +optional
 	Repo string `json:"repo,omitempty"`
+
+	// Output is the externalization contract: response (default), commit, or pr.
+	// +kubebuilder:default=response
+	// +optional
+	Output Output `json:"output,omitempty"`
 
 	// Owner is the durable identity that owns this task (e.g. "yuri").
 	// Reconciliation and listing are keyed by owner, not by pi session.
