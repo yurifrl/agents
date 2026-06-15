@@ -1,0 +1,46 @@
+version: '3'
+
+vars:
+  CONTROLLER_GEN: go run sigs.k8s.io/controller-tools/cmd/controller-gen@latest
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  tidy:
+    desc: Resolve and prune go module dependencies
+    cmds:
+      - go mod tidy
+
+  generate:
+    desc: Generate DeepCopy methods for API types
+    cmds:
+      - "{{.CONTROLLER_GEN}} object:headerFile=hack/boilerplate.go.txt paths=./api/..."
+
+  manifests:
+    desc: Generate CRDs and RBAC into config/
+    cmds:
+      - "{{.CONTROLLER_GEN}} crd rbac:roleName=agents-controller paths=./api/... paths=./internal/... output:crd:dir=config/crd output:rbac:dir=config/rbac"
+
+  build:
+    desc: Compile all packages (no binaries emitted)
+    cmds:
+      - go build ./...
+
+  vet:
+    cmds:
+      - go vet ./...
+
+  run:controller:
+    desc: Run the controller against the current kubecontext
+    cmds:
+      - go run ./cmd/agents controller
+
+  check:
+    desc: tidy + generate + build + vet
+    cmds:
+      - task: tidy
+      - task: generate
+      - task: build
+      - task: vet

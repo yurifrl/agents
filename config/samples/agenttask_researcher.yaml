@@ -1,0 +1,11 @@
+apiVersion: agents.yurifrl.dev/v1alpha1
+kind: AgentTask
+metadata:
+  name: hello-researcher
+  namespace: agents
+spec:
+  type: researcher
+  owner: yuri
+  prompt: "Summarize the README of this repo."
+  runtime: adk
+  lifecycle: ephemeral
