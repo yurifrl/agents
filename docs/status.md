@@ -11,28 +11,41 @@ _Last reconciled: 2026-06-15._
   runtime, lifecycle, output; status: phase, podName, artifacts, restarts.
 - **Controller (ephemeral)** — `AgentTask` → Pod (+Service), owner refs,
   `activeDeadlineSeconds`, configurable `imagePullSecrets`, pod-phase → status.
-- **Agent entrypoint** — `agent-entrypoint`; `output: response` (Claude
-  completion) and `output: pr|commit` (go-git clone/commit/push + GitHub API).
-  Verified: a pod opened a real PR against `yurifrl/agents`.
-- **Image** — `ghcr.io/yurifrl/agents`, distroless, multi-arch (amd64+arm64),
-  built and pushed by CI with the workflow `GITHUB_TOKEN`.
+- **Agent entrypoint** — `agent-entrypoint`; one-shot or `--serve` (in-pod A2A
+  server: agent card, `/invoke` SSE, `/health`). SIGTERM-aware.
+- **A2A surface** (`internal/a2a`) + **runner** (`internal/runner`) — shared
+  invocation orchestration emitting streamed events; `output: response` and
+  `output: pr|commit` (go-git clone/commit/push + GitHub API). Verified: a pod
+  opened a real PR against `yurifrl/agents`.
+- **Gateway** (`internal/gateway`, `agents gateway`) — owner-scoped task store
+  (in-memory MVP), creates AgentTask CRDs, waits for pod readiness, dispatches
+  `/invoke`, fans out SSE with replay (reconnection), cancel/ack/list +
+  reconnection API. Pod-side A2A verified locally; full gateway loop needs the
+  cluster (pod Service DNS).
+- **pi extension** (`pi/pi-remote-agents.ts`) — `RemoteAgent`, `RemoteAgentList`,
+  `RemoteAgentGet`, `RemoteAgentKill` + startup reconciliation. Transpiles;
+  end-to-end needs a running gateway.
+- **Controller** — pods now run `--serve` with a `/health` readiness probe.
+- **Image** — `ghcr.io/yurifrl/agents`, distroless, multi-arch (amd64+arm64).
 
 ## Pending
 
-- **CRD install (declarative)** — the `AgentTask` CRD is still applied by hand.
-  The agents repo is private, so an ArgoCD cross-repo source needs repo creds (or
-  the repo going public) before the CRD install can move into the `agents` app.
+- **Durable task store (D5)** — the gateway store is in-memory; reconciliation
+  state is lost on gateway restart until a SQL (Dolt) `TaskStore` lands.
+- **Gateway deployment** — the gateway runs as a CLI today; no in-cluster
+  Deployment/Service yet, and TTL/stale reaper + foreground-disconnect cancel
+  (D6) are not implemented.
+- **`RemoteAgentSteer`** — no steer endpoint on the gateway yet.
+- **CRD install (declarative)** — still applied by hand; the agents repo is
+  private, so an ArgoCD cross-repo source needs repo creds (or the repo going
+  public).
 - **1Password `agents` item** — the one documented manual prerequisite; the
-  `agents` ExternalSecret (anthropic-api-key, github-token, git-email) is already
-  declared in `home-systems`, but won't sync until the item exists.
-- **Persistent lifecycle** — Deployment-backed warm agents (reconciler stubs
-  only today).
-- **Restart budget / max-concurrency** — config fields exist; not yet enforced.
-- **ADK tool-use loop** — the entrypoint is a single completion / structured
-  edit, not a real tool-using agent loop yet.
-- **`Agent.md` parsing** — `--profile` is currently a name, not a parsed
-  definition file.
-- Gateway, pi extension, beads workstrator — not started in this repo.
+  `agents` ExternalSecret is declared but won't sync until the item exists.
+- **Persistent lifecycle** — Deployment-backed warm agents (reconciler stubs).
+- **Restart budget / max-concurrency** — config fields exist; not enforced.
+- **ADK tool-use loop / `Agent.md` parsing** — entrypoint is a single completion
+  / structured edit; `--profile` is a name, not a parsed definition.
+- **beads workstrator**, **MCP facade (hermes)** — not started.
 
 ## Known corner-cuts to repay (debt log)
 
