@@ -4,6 +4,7 @@ package agenttask
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -72,8 +73,30 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 
+	// Max-concurrency guard (ephemeral only): if at capacity and this task has no
+	// pod yet, hold it Pending and requeue.
+	if task.Status.PodName == "" && r.cfg.MaxConcurrent > 0 {
+		atCapacity, err := r.atCapacity(ctx)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if atCapacity {
+			if _, err := r.setPhase(ctx, &task, agentsv1alpha1.AgentTaskPhasePending,
+				fmt.Sprintf("waiting for capacity (max %d)", r.cfg.MaxConcurrent)); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+	}
+
 	pod, err := r.ensurePod(ctx, &task)
 	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if pod == nil {
+		// Restart budget exhausted; mark failed.
+		_, err := r.setPhase(ctx, &task, agentsv1alpha1.AgentTaskPhaseFailed,
+			fmt.Sprintf("pod failed and restart budget (%d) exhausted", r.cfg.RestartBudget))
 		return ctrl.Result{}, err
 	}
 	if err := r.ensureService(ctx, &task); err != nil {
@@ -83,16 +106,66 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return r.syncStatus(ctx, &task, pod)
 }
 
-// ensurePod creates the agent pod if missing and returns the live pod.
+// atCapacity reports whether the number of live managed pods meets the limit.
+func (r *Reconciler) atCapacity(ctx context.Context) (bool, error) {
+	var pods corev1.PodList
+	if err := r.client.List(ctx, &pods,
+		client.InNamespace(r.cfg.Namespace),
+		client.MatchingLabels{"app.kubernetes.io/managed-by": "agents-controller"},
+	); err != nil {
+		return false, err
+	}
+	live := 0
+	for i := range pods.Items {
+		switch pods.Items[i].Status.Phase {
+		case corev1.PodPending, corev1.PodRunning:
+			live++
+		}
+	}
+	return live >= r.cfg.MaxConcurrent, nil
+}
+
+// setPhase patches only the status phase/message.
+func (r *Reconciler) setPhase(ctx context.Context, task *agentsv1alpha1.AgentTask, phase agentsv1alpha1.AgentTaskPhase, msg string) (ctrl.Result, error) {
+	if task.Status.Phase == phase && task.Status.Message == msg {
+		return ctrl.Result{}, nil
+	}
+	updated := task.DeepCopy()
+	updated.Status.Phase = phase
+	updated.Status.Message = msg
+	if err := r.client.Status().Update(ctx, updated); err != nil {
+		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
+	}
+	return ctrl.Result{}, nil
+}
+
+// ensurePod creates the agent pod if missing and returns the live pod. If the
+// pod has failed it is recreated until the restart budget is exhausted, in which
+// case ensurePod returns (nil, nil) to signal terminal failure.
 func (r *Reconciler) ensurePod(ctx context.Context, task *agentsv1alpha1.AgentTask) (*corev1.Pod, error) {
 	key := types.NamespacedName{Name: podName(task), Namespace: r.cfg.Namespace}
 
 	var existing corev1.Pod
 	err := r.client.Get(ctx, key, &existing)
 	if err == nil {
-		return &existing, nil
-	}
-	if !apierrors.IsNotFound(err) {
+		if existing.Status.Phase != corev1.PodFailed {
+			return &existing, nil
+		}
+		// Pod failed: recreate within budget, else signal terminal failure.
+		if task.Status.Restarts >= r.cfg.RestartBudget {
+			return nil, nil
+		}
+		if err := r.client.Delete(ctx, &existing); err != nil && !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("deleting failed pod: %w", err)
+		}
+		updated := task.DeepCopy()
+		updated.Status.Restarts++
+		if err := r.client.Status().Update(ctx, updated); err != nil {
+			return nil, fmt.Errorf("bumping restart count: %w", err)
+		}
+		task.Status.Restarts = updated.Status.Restarts
+		// Recreate below.
+	} else if !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("getting pod: %w", err)
 	}
 
@@ -101,6 +174,9 @@ func (r *Reconciler) ensurePod(ctx context.Context, task *agentsv1alpha1.AgentTa
 		return nil, fmt.Errorf("setting pod owner ref: %w", err)
 	}
 	if err := r.client.Create(ctx, pod); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return pod, nil
+		}
 		return nil, fmt.Errorf("creating pod: %w", err)
 	}
 	return pod, nil

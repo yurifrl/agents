@@ -42,6 +42,7 @@ type TaskStore interface {
 	Get(id string) (*Task, bool)
 	List(owner string, onlyUnacked bool) []*Task
 	Update(t *Task) error
+	Delete(id string) error
 }
 
 // MemoryStore is an in-process TaskStore.
@@ -97,5 +98,12 @@ func (s *MemoryStore) Update(t *Task) error {
 	t.UpdatedAt = time.Now()
 	cp := *t
 	s.tasks[t.ID] = &cp
+	return nil
+}
+
+func (s *MemoryStore) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.tasks, id)
 	return nil
 }

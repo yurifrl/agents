@@ -42,6 +42,7 @@ func newGatewayCmd() *cobra.Command {
 			}
 
 			gw := gateway.New(gateway.NewMemoryStore(), k8s, cfg.Namespace)
+			go gw.StartReaper(cmd.Context(), gateway.DefaultReaperConfig())
 
 			srv := &http.Server{Addr: addr, Handler: gw.Handler()}
 			logger.Info("starting gateway", "addr", addr, "namespace", cfg.Namespace)
