@@ -5,17 +5,15 @@
 package workstrator
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
+
+	"github.com/yurifrl/agents/internal/gwclient"
 )
 
 // Config controls the workstrator loop.
@@ -33,7 +31,7 @@ type Workstrator struct {
 	cfg   Config
 	bd    *bd
 	log   logr.Logger
-	http  *http.Client
+	gw    *gwclient.Client
 	mu    sync.Mutex
 	inFlt map[string]bool
 }
@@ -50,7 +48,7 @@ func New(cfg Config, log logr.Logger) *Workstrator {
 		cfg:   cfg,
 		bd:    newBD(),
 		log:   log.WithName("workstrator"),
-		http:  &http.Client{},
+		gw:    gwclient.New(cfg.GatewayURL),
 		inFlt: make(map[string]bool),
 	}
 }
@@ -146,31 +144,14 @@ func (w *Workstrator) repoFor(id string) string {
 
 // dispatch creates a task on the gateway and returns its id.
 func (w *Workstrator) dispatch(ctx context.Context, prompt, repo string) (string, error) {
-	body, _ := json.Marshal(map[string]string{
-		"owner":  w.cfg.Owner,
-		"type":   w.cfg.AgentType,
-		"prompt": prompt,
-		"repo":   repo,
-		"output": "pr",
+	task, err := w.gw.Create(ctx, gwclient.CreateRequest{
+		Owner:  w.cfg.Owner,
+		Type:   w.cfg.AgentType,
+		Prompt: prompt,
+		Repo:   repo,
+		Output: "pr",
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.cfg.GatewayURL+"/tasks/create", bytes.NewReader(body))
 	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := w.http.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("gateway create -> %d: %s", resp.StatusCode, string(raw))
-	}
-	var task struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(raw, &task); err != nil {
 		return "", err
 	}
 	return task.ID, nil
@@ -187,20 +168,8 @@ func (w *Workstrator) waitResult(ctx context.Context, taskID string) (string, er
 		case <-ticker.C:
 		}
 
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, w.cfg.GatewayURL+"/tasks/"+taskID, nil)
-		resp, err := w.http.Do(req)
+		task, err := w.gw.Get(ctx, taskID)
 		if err != nil {
-			continue
-		}
-		raw, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		var task struct {
-			State  string `json:"state"`
-			Result string `json:"result"`
-			Error  string `json:"error"`
-		}
-		if err := json.Unmarshal(raw, &task); err != nil {
 			continue
 		}
 		switch task.State {

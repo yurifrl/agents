@@ -32,6 +32,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newEntrypointCmd())
 	root.AddCommand(newGatewayCmd())
 	root.AddCommand(newWorkstratorCmd())
+	root.AddCommand(newMCPCmd())
 	return root
 }
 
