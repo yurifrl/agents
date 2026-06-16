@@ -31,6 +31,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newControllerCmd())
 	root.AddCommand(newEntrypointCmd())
 	root.AddCommand(newGatewayCmd())
+	root.AddCommand(newWorkstratorCmd())
 	return root
 }
 
