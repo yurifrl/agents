@@ -42,16 +42,6 @@ func (r *Reconciler) buildPod(task *agentsv1alpha1.AgentTask) *corev1.Pod {
 		deadline = *task.Spec.ActiveDeadlineSeconds
 	}
 
-	runtime := task.Spec.Runtime
-	if runtime == "" {
-		runtime = agentsv1alpha1.RuntimeADK
-	}
-
-	output := task.Spec.Output
-	if output == "" {
-		output = agentsv1alpha1.OutputResponse
-	}
-
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName(task),
@@ -66,20 +56,30 @@ func (r *Reconciler) buildPod(task *agentsv1alpha1.AgentTask) *corev1.Pod {
 				{
 					Name:  "agent",
 					Image: r.cfg.AgentImage,
+					// The pod serves A2A; the gateway delivers the prompt via
+					// /invoke (see docs/architecture.md D9/D10).
 					Args: []string{
 						"agent-entrypoint",
+						"--serve",
 						"--profile", task.Spec.Type,
-						"--runtime", string(runtime),
 					},
 					Ports: []corev1.ContainerPort{
 						{Name: "a2a", ContainerPort: AgentPort, Protocol: corev1.ProtocolTCP},
 					},
+					ReadinessProbe: &corev1.Probe{
+						ProbeHandler: corev1.ProbeHandler{
+							HTTPGet: &corev1.HTTPGetAction{
+								Path: "/health",
+								Port: intstr.FromInt(AgentPort),
+							},
+						},
+						InitialDelaySeconds: 2,
+						PeriodSeconds:       3,
+					},
 					Env: []corev1.EnvVar{
 						{Name: "AGENT_TASK_NAME", Value: task.Name},
 						{Name: "AGENT_OWNER", Value: task.Spec.Owner},
-						{Name: "AGENT_PROMPT", Value: task.Spec.Prompt},
-						{Name: "AGENT_REPO", Value: task.Spec.Repo},
-						{Name: "AGENT_OUTPUT", Value: string(output)},
+						{Name: "AGENT_PROFILE", Value: task.Spec.Type},
 					},
 					EnvFrom: []corev1.EnvFromSource{
 						{

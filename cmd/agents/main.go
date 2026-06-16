@@ -3,14 +3,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
 
 func main() {
-	if err := newRootCmd().Execute(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := newRootCmd().ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -25,6 +30,7 @@ func newRootCmd() *cobra.Command {
 	}
 	root.AddCommand(newControllerCmd())
 	root.AddCommand(newEntrypointCmd())
+	root.AddCommand(newGatewayCmd())
 	return root
 }
 

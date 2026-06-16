@@ -59,6 +59,12 @@ implementation detail — record it here when you do.
   "remember" to open a PR.
 - **D8 — CI builds & pushes via the workflow `GITHUB_TOKEN`.** No personal access
   tokens for image publishing.
+- **D9 — A2A surface implemented directly, not via `a2a-go`.** D10 of the change
+  design requires the gateway and pods to *speak A2A* (agent-card, an invoke
+  endpoint, SSE streaming, health) — it does not mandate the `a2a-go` library.
+  For this MVP we implement that conformant surface in `internal/a2a` with the
+  stdlib (net/http + SSE), avoiding a heavy dependency. Revisit if full A2A
+  spec conformance (push notifications, JSON-RPC envelope) becomes required.
 
 ## Boundaries
 
