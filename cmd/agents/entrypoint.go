@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	agentprofiles "github.com/yurifrl/agents"
 	"github.com/yurifrl/agents/internal/a2a"
 	"github.com/yurifrl/agents/internal/agent"
 	"github.com/yurifrl/agents/internal/output"
@@ -15,10 +16,10 @@ import (
 
 func newEntrypointCmd() *cobra.Command {
 	var (
-		profile string
-		model   string
-		serve   bool
-		addr    string
+		profile     string
+		profilesDir string
+		serve       bool
+		addr        string
 	)
 
 	cmd := &cobra.Command{
@@ -30,10 +31,14 @@ func newEntrypointCmd() *cobra.Command {
 				return fmt.Errorf("ANTHROPIC_API_KEY is not set (mount the agents secret)")
 			}
 
+			def, err := agentprofiles.LoadProfile(profilesDir, profile)
+			if err != nil {
+				return err
+			}
+
 			run := runner.New(
 				agent.NewClient(apiKey),
-				model,
-				profile,
+				def,
 				os.Getenv("GITHUB_TOKEN"),
 				output.Author{
 					Name:  envOr("GIT_AUTHOR_NAME", "agents-bot"),
@@ -42,14 +47,14 @@ func newEntrypointCmd() *cobra.Command {
 			)
 
 			if serve {
-				return serveAgent(cmd.Context(), run, profile, addr)
+				return serveAgent(cmd.Context(), run, def.Name, addr)
 			}
 			return oneShot(cmd.Context(), run)
 		},
 	}
 
-	cmd.Flags().StringVar(&profile, "profile", envOr("AGENT_PROFILE", "researcher"), "agent profile/definition name")
-	cmd.Flags().StringVar(&model, "model", envOr("AGENT_MODEL", "claude-sonnet-4-5-20250929"), "model id")
+	cmd.Flags().StringVar(&profile, "profile", envOr("AGENT_PROFILE", "researcher"), "agent profile name (Agent.md)")
+	cmd.Flags().StringVar(&profilesDir, "profiles-dir", envOr("AGENT_PROFILES_DIR", ""), "override dir of Agent.md files (e.g. a mounted ConfigMap)")
 	cmd.Flags().BoolVar(&serve, "serve", false, "run as an A2A server instead of one-shot")
 	cmd.Flags().StringVar(&addr, "addr", envOr("AGENT_ADDR", ":8080"), "A2A listen address (with --serve)")
 

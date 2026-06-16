@@ -9,33 +9,34 @@ import (
 
 	"github.com/yurifrl/agents/internal/a2a"
 	"github.com/yurifrl/agents/internal/agent"
+	"github.com/yurifrl/agents/internal/agentmd"
 	"github.com/yurifrl/agents/internal/output"
 )
 
 // Runner executes invocations for one agent profile.
 type Runner struct {
-	client  *agent.Client
-	model   string
-	profile string
-	token   string
-	author  output.Author
+	client *agent.Client
+	def    *agentmd.Definition
+	token  string
+	author output.Author
 }
 
-// New builds a Runner.
-func New(client *agent.Client, model, profile, token string, author output.Author) *Runner {
-	return &Runner{client: client, model: model, profile: profile, token: token, author: author}
+// New builds a Runner from a parsed Agent.md definition.
+func New(client *agent.Client, def *agentmd.Definition, token string, author output.Author) *Runner {
+	return &Runner{client: client, def: def, token: token, author: author}
 }
 
 // Run executes the invocation, emitting streaming events, and returns the
-// terminal result. It matches the a2a.Runner signature.
+// terminal result. It matches the a2a.Runner signature. The InvokeRequest may
+// override the definition's model and output.
 func (r *Runner) Run(ctx context.Context, req a2a.InvokeRequest, emit func(a2a.Event)) (*a2a.Result, error) {
 	model := req.Model
 	if model == "" {
-		model = r.model
+		model = r.def.Model
 	}
 	out := req.Output
 	if out == "" {
-		out = "response"
+		out = r.def.Output
 	}
 
 	switch out {
@@ -47,8 +48,7 @@ func (r *Runner) Run(ctx context.Context, req a2a.InvokeRequest, emit func(a2a.E
 }
 
 func (r *Runner) runResponse(ctx context.Context, model string, req a2a.InvokeRequest, emit func(a2a.Event)) (*a2a.Result, error) {
-	system := fmt.Sprintf("You are the %q agent. Answer the user's task directly and concisely.", r.profile)
-	text, err := r.client.Run(ctx, agent.Request{Model: model, Prompt: req.Prompt, System: system})
+	text, err := r.client.Run(ctx, agent.Request{Model: model, Prompt: req.Prompt, System: r.def.Instruction})
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,8 @@ func (r *Runner) runPR(ctx context.Context, model, out string, req a2a.InvokeReq
 	}
 
 	emit(a2a.Event{Type: a2a.EventArtifact, Artifact: &a2a.Artifact{Name: "progress", Text: "planning change"}})
-	change, err := r.client.Plan(ctx, model, req.Prompt, "")
+	taskPrompt := r.def.Instruction + "\n\nTask:\n" + req.Prompt
+	change, err := r.client.Plan(ctx, model, taskPrompt, "")
 	if err != nil {
 		return nil, err
 	}
