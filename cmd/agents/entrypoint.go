@@ -42,7 +42,7 @@ func newEntrypointCmd() *cobra.Command {
 				os.Getenv("GITHUB_TOKEN"),
 				output.Author{
 					Name:  envOr("GIT_AUTHOR_NAME", "agents-bot"),
-					Email: envOr("GIT_EMAIL", "agents-bot@users.noreply.github.com"),
+					Email: envOr("GIT_AUTHOR_EMAIL", "agents-bot@users.noreply.github.com"),
 				},
 			)
 

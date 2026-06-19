@@ -55,8 +55,11 @@ _Last reconciled: 2026-06-15._
   not wired; background vs foreground is a pi-side flag only.
 - **pi widget integration (5.3)** — tools work; no custom remote-agent widget.
 - **`RemoteAgentSteer`** — no steer endpoint on the gateway.
-- **1Password `agents` item** — the one documented manual prerequisite; the
-  `agents` ExternalSecret is declared but won't sync until the item exists.
+- **1Password `agents` item** — exists in the Kubernetes vault with
+  `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GITHUB_TOKEN`, `GIT_AUTHOR_NAME`,
+  `GIT_AUTHOR_EMAIL`. The `agents` ExternalSecret maps these by exact label;
+  no manual prerequisite remains. (The agent runs on Anthropic/Claude; the
+  OpenAI key is present but unused unless the client is switched.)
 - **CRD source vs vendored** — the CRD is vendored into `k8s/charts/agents/crds/`
   (matching the hermes chart pattern) because the agents repo is private; keep it
   in sync with `config/crd` on CRD changes.
