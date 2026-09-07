@@ -1,0 +1,13 @@
+{
+  "name": "@remote-agents/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/main.ts",
+  "types": "src/main.ts",
+  "dependencies": {
+    "@remote-agents/protocol": "workspace:*",
+    "@remote-agents/rpc-driver": "workspace:*",
+    "@remote-agents/surfaces": "workspace:*"
+  }
+}

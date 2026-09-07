@@ -1,0 +1,16 @@
+{
+  "name": "remote-agents",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "server": "bun packages/server/src/main.ts",
+    "test": "bun test packages/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "typebox": "^1.0.0"
+  },
+  "devDependencies": {
+    "bun-types": "^1.4.0"
+  }
+}
