@@ -2,25 +2,60 @@
 // body that is the agent's system prompt / instruction. The same file is the
 // declarative unit consumed locally (pi subagents) and remotely (this system) —
 // see the remote-agents design D2.
+//
+// +kubebuilder:object:generate=true
 package agentmd
 
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"sigs.k8s.io/yaml"
 )
 
+// ToolGrant declares one tool the agent may use, with optional constraints.
+type ToolGrant struct {
+	Name       string     `json:"name"`
+	Allow      [][]string `json:"allow,omitempty"`
+	AllowHosts []string   `json:"allowHosts,omitempty"`
+	URLFromEnv string     `json:"urlFromEnv,omitempty"`
+	MaxCalls   int        `json:"maxCalls,omitempty"`
+	Timeout    string     `json:"timeout,omitempty"`
+	Cooldown   string     `json:"cooldown,omitempty"`
+}
+
+// LoopSpec configures a recurring agent loop.
+type LoopSpec struct {
+	Interval string `json:"interval"`
+}
+
 // Definition is a parsed Agent.md.
 type Definition struct {
-	Name      string   `json:"name"`
-	Runtime   string   `json:"runtime"`
-	Model     string   `json:"model"`
-	Tools     []string `json:"tools"`
-	Output    string   `json:"output"`
-	Lifecycle string   `json:"lifecycle"`
+	Name      string      `json:"name"`
+	Runtime   string      `json:"runtime"`
+	Model     string      `json:"model"`
+	Tools     []ToolGrant `json:"tools"`
+	Output    string      `json:"output"`
+	Lifecycle string      `json:"lifecycle"`
+	Loop      *LoopSpec   `json:"loop,omitempty"`
 	// Instruction is the markdown body (the system prompt).
 	Instruction string `json:"-"`
+}
+
+// LoopInterval returns the configured loop interval, or 0 when no loop is set.
+func (d *Definition) LoopInterval() (time.Duration, error) {
+	if d.Loop == nil {
+		return 0, nil
+	}
+	if d.Loop.Interval == "" {
+		return 0, fmt.Errorf("agent definition %q has a loop with an empty interval", d.Name)
+	}
+	dur, err := time.ParseDuration(d.Loop.Interval)
+	if err != nil {
+		return 0, fmt.Errorf("agent definition %q has an invalid loop interval %q: %w", d.Name, d.Loop.Interval, err)
+	}
+	return dur, nil
 }
 
 // Defaults applied when a field is omitted (design: runtime adk, output response,
@@ -81,6 +116,14 @@ func (d *Definition) validate() error {
 	case "ephemeral", "persistent":
 	default:
 		return fmt.Errorf("invalid lifecycle %q (want ephemeral|persistent)", d.Lifecycle)
+	}
+	for i, tool := range d.Tools {
+		if tool.Name == "" {
+			return fmt.Errorf("agent definition %q: tools[%d] missing name", d.Name, i)
+		}
+	}
+	if _, err := d.LoopInterval(); err != nil {
+		return err
 	}
 	if d.Instruction == "" {
 		return fmt.Errorf("agent definition %q has an empty body (instruction)", d.Name)

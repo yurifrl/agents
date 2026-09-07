@@ -19,11 +19,18 @@ type Runner struct {
 	def    *agentmd.Definition
 	token  string
 	author output.Author
+	tools  agent.ToolExecutor
 }
 
 // New builds a Runner from a parsed Agent.md definition.
 func New(client *agent.Client, def *agentmd.Definition, token string, author output.Author) *Runner {
 	return &Runner{client: client, def: def, token: token, author: author}
+}
+
+// SetTools attaches a tool executor. When set, response runs use the tool-use
+// loop and emit tool call/result events.
+func (r *Runner) SetTools(tools agent.ToolExecutor) {
+	r.tools = tools
 }
 
 // Run executes the invocation, emitting streaming events, and returns the
@@ -48,12 +55,35 @@ func (r *Runner) Run(ctx context.Context, req a2a.InvokeRequest, emit func(a2a.E
 }
 
 func (r *Runner) runResponse(ctx context.Context, model string, req a2a.InvokeRequest, emit func(a2a.Event)) (*a2a.Result, error) {
-	text, err := r.client.Run(ctx, agent.Request{Model: model, Prompt: req.Prompt, System: r.def.Instruction})
+	text, err := r.complete(ctx, model, req, emit)
 	if err != nil {
 		return nil, err
 	}
 	emit(a2a.Event{Type: a2a.EventArtifact, Artifact: &a2a.Artifact{Name: "response", Text: text}})
 	return &a2a.Result{Output: text}, nil
+}
+
+func (r *Runner) complete(ctx context.Context, model string, req a2a.InvokeRequest, emit func(a2a.Event)) (string, error) {
+	if r.tools == nil {
+		return r.client.Run(ctx, agent.Request{Model: model, Prompt: req.Prompt, System: r.def.Instruction})
+	}
+	redact := func(s string) string { return s }
+	if rd, ok := r.tools.(interface{ Redact(string) string }); ok {
+		redact = rd.Redact
+	}
+	return r.client.RunLoop(ctx, agent.LoopRequest{
+		Model:  model,
+		System: r.def.Instruction,
+		Prompt: req.Prompt,
+		Tools:  r.tools,
+		OnToolEvent: func(name string, isResult bool, text string) {
+			typ := a2a.EventToolCall
+			if isResult {
+				typ = a2a.EventToolResult
+			}
+			emit(a2a.Event{Type: typ, Tool: &a2a.ToolEvent{Name: name, Text: redact(text)}})
+		},
+	})
 }
 
 func (r *Runner) runPR(ctx context.Context, model, out string, req a2a.InvokeRequest, emit func(a2a.Event)) (*a2a.Result, error) {

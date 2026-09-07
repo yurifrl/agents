@@ -20,6 +20,14 @@ rules:
 - apiGroups:
   - agents.yurifrl.dev
   resources:
+  - agentskills
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - agents.yurifrl.dev
+  resources:
   - agenttasks
   verbs:
   - create

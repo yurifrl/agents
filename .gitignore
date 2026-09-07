@@ -2,6 +2,7 @@
 /dist/
 *.out
 *.test
+.agents/tmp/
 
 # Beads / Dolt files (added by bd init)
 .dolt/

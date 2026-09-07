@@ -27,3 +27,9 @@ that's a bug: write it down or you're operating on drift.
 - [`conventions.md`](./conventions.md) — the rules every change must satisfy,
   and the anti-patterns that count as cutting corners.
 - [`status.md`](./status.md) — what is actually built vs. pending, right now.
+- [`research/`](./research/) — dated research dumps compiled from subagent
+  investigations (sources, probes, comparisons). Evidence for decisions, not
+  decisions themselves; the current truth stays in the three docs above.
+- [`html/`](./html/) — generated presentations. Data lives in sibling
+  `*-data.js` files; pages read `window.DATA`. Entry point:
+  [`html/remote-subagents.html`](./html/remote-subagents.html).

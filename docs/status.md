@@ -50,7 +50,10 @@ _Last reconciled: 2026-06-15._
   the gateway routes to it by name. Controller still skips persistent tasks.
 - **ADK tool-use loop (2.2/2.4)** — stopped on doubt (google ADK vs native
   Anthropic tool-use, large surface). The worker does a single structured edit,
-  not a multi-step tool loop.
+  not a multi-step tool loop. Resolved by research (D2 in
+  `research/2026-09-07-remote-subagents-design.md`): `runtime: adk|pi` becomes
+  `runtime: harness` — the worker is a full coding CLI driven over omp RPC;
+  ADK is an authoring framework, not a runtime.
 - **Foreground-disconnect cancel (D6, 4.4/5.5)** — SSE hold/release semantics
   not wired; background vs foreground is a pi-side flag only.
 - **pi widget integration (5.3)** — tools work; no custom remote-agent widget.
@@ -63,6 +66,21 @@ _Last reconciled: 2026-06-15._
 - **CRD source vs vendored** — the CRD is vendored into `k8s/charts/agents/crds/`
   (matching the hermes chart pattern) because the agents repo is private; keep it
   in sync with `config/crd` on CRD changes.
+
+## Built: remote subagents, local-first (2026-09-07)
+
+- `remote-agents/` — server-managed omp workers driven from a parent omp
+  session. Monorepo (`packages/protocol|rpc-driver|surfaces|server|extension`),
+  Bun, TypeScript. omp RPC JSONL over stdio (process surface) or TCP bridge
+  (herdr surface). HTTP+SSE API on 127.0.0.1:8679; durable JSON store + per-task
+  event logs; re-adoption on boot; steer/cancel/ack; widget + `RemoteAgent*`
+  tools + `/agents` commands; result steer-back; session-file resume hints.
+  **Verified live**: `bun test` 166/166; in-process server e2e; HTTP e2e
+  (`completed`, result + sessionFile recorded); real `omp -p` session spawned a
+  worker and received `PING-99` back through the extension. Contract record:
+  `remote-agents/CONTRACT.md`. Notable finding: installed omp (pi 0.84.4) never
+  emits `agent_settled` — the supervisor settles on `agent_end` + 3s quiet
+  window (see CONTRACT §4).
 
 ## Known corner-cuts to repay (debt log)
 

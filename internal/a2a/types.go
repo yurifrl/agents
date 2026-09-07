@@ -41,15 +41,26 @@ const (
 	EventResult EventType = "result"
 	// EventError is the terminal failure event.
 	EventError EventType = "error"
+	// EventToolCall reports the model invoking a tool.
+	EventToolCall EventType = "tool_call"
+	// EventToolResult reports the outcome of a tool invocation.
+	EventToolResult EventType = "tool_result"
 )
 
 // Event is one SSE frame. Exactly one of the payload fields is set per Type.
 type Event struct {
-	Type     EventType `json:"type"`
-	State    string    `json:"state,omitempty"`
-	Artifact *Artifact `json:"artifact,omitempty"`
-	Result   *Result   `json:"result,omitempty"`
-	Error    string    `json:"error,omitempty"`
+	Type     EventType  `json:"type"`
+	State    string     `json:"state,omitempty"`
+	Artifact *Artifact  `json:"artifact,omitempty"`
+	Result   *Result    `json:"result,omitempty"`
+	Error    string     `json:"error,omitempty"`
+	Tool     *ToolEvent `json:"tool,omitempty"`
+}
+
+// ToolEvent carries one tool call (the arguments) or tool result (the output).
+type ToolEvent struct {
+	Name string `json:"name"`
+	Text string `json:"text,omitempty"`
 }
 
 // Artifact is a unit of streamed output.

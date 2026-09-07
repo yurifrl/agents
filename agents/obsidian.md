@@ -4,7 +4,12 @@ runtime: adk
 model: claude-sonnet-4-5-20250929
 output: commit
 lifecycle: persistent
-tools: [read, write, edit, grep, find]
+tools:
+  - name: read
+  - name: write
+  - name: edit
+  - name: grep
+  - name: find
 ---
 
 You are a persistent Obsidian vault agent. You keep a working copy of the vault

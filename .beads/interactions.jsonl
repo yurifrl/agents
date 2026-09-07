@@ -1,0 +1,1 @@
+{"id":"int-08b63bd206d5cb40b714ad1ed6284fcb","kind":"field_change","created_at":"2026-07-12T15:51:25.635353Z","actor":"Yuri","issue_id":"agents-j8w.1","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Repository goals, architecture, integration points, conventions, and recent commits reviewed."}}

@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -50,18 +51,64 @@ const (
 	AgentTaskPhaseCanceled  AgentTaskPhase = "Canceled"
 )
 
+// SkillRef selects one AgentSkill by name or a set of AgentSkills by label
+// selector. Exactly one of Name or Selector must be set.
+// +kubebuilder:validation:XValidation:rule="has(self.name) != has(self.selector)",message="exactly one of name or selector must be set"
+type SkillRef struct {
+	// Name selects a single AgentSkill in the task namespace. A missing skill
+	// fails validation before any workload is created.
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// Selector selects all matching AgentSkills in the task namespace. An empty
+	// result is valid and contributes zero skills.
+	// +optional
+	Selector *metav1.LabelSelector `json:"selector,omitempty"`
+}
+
 // AgentTaskSpec defines the desired state of an AgentTask.
+// +kubebuilder:validation:XValidation:rule="has(self.type) != has(self.definition)",message="exactly one of type or definition must be set"
+// +kubebuilder:validation:XValidation:rule="!has(self.type) || has(self.prompt)",message="prompt is required when type (profile mode) is set"
 type AgentTaskSpec struct {
 	// Type is the agent profile/definition name to run (e.g. "researcher", "worker").
-	// It selects which Agent.md the entrypoint loads.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	Type string `json:"type"`
+	// It selects which Agent.md the entrypoint loads. Mutually exclusive with
+	// Definition (profile mode).
+	// +optional
+	Type string `json:"type,omitempty"`
 
-	// Prompt is the task instruction handed to the agent.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	Prompt string `json:"prompt"`
+	// Definition is an inline Agent.md document (frontmatter + body) that fully
+	// describes the agent. Mutually exclusive with Type (inline mode).
+	// +optional
+	Definition string `json:"definition,omitempty"`
+
+	// Prompt is the task instruction handed to the agent. Required in profile
+	// mode; optional in inline mode.
+	// +optional
+	Prompt string `json:"prompt,omitempty"`
+
+	// Skills selects AgentSkill resources composed into the agent bundle.
+	// Inline mode only.
+	// +optional
+	Skills []SkillRef `json:"skills,omitempty"`
+
+	// Image overrides the controller's configured agent image for this task.
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// ServiceAccountName is the pod service account. Empty uses the namespace
+	// default.
+	// +optional
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+
+	// SecretName overrides the controller's configured secret mounted wholesale
+	// into the agent pod.
+	// +optional
+	SecretName string `json:"secretName,omitempty"`
+
+	// Env adds extra environment variables to the agent container, after the
+	// built-ins.
+	// +optional
+	Env []corev1.EnvVar `json:"env,omitempty"`
 
 	// Repo is the git repository the agent operates on (for pr/commit outputs).
 	// Accepts "owner/repo" or a full https URL. Optional for response-only agents.

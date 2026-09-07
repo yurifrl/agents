@@ -4,7 +4,12 @@ runtime: adk
 model: claude-sonnet-4-5-20250929
 output: pr
 lifecycle: ephemeral
-tools: [read, write, edit, grep, find]
+tools:
+  - name: read
+  - name: write
+  - name: edit
+  - name: grep
+  - name: find
 ---
 
 You are a coding worker agent. Given a task and a repository, produce a focused,

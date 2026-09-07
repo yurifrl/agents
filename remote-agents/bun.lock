@@ -1,0 +1,69 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "remote-agents",
+      "dependencies": {
+        "typebox": "^1.0.0",
+      },
+      "devDependencies": {
+        "bun-types": "^1.4.0",
+      },
+    },
+    "packages/extension": {
+      "name": "@remote-agents/extension",
+      "version": "0.1.0",
+      "dependencies": {
+        "@remote-agents/protocol": "workspace:*",
+        "typebox": "^1.0.0",
+      },
+    },
+    "packages/protocol": {
+      "name": "@remote-agents/protocol",
+      "version": "0.1.0",
+    },
+    "packages/rpc-driver": {
+      "name": "@remote-agents/rpc-driver",
+      "version": "0.1.0",
+      "dependencies": {
+        "@remote-agents/protocol": "workspace:*",
+      },
+    },
+    "packages/server": {
+      "name": "@remote-agents/server",
+      "version": "0.1.0",
+      "dependencies": {
+        "@remote-agents/protocol": "workspace:*",
+        "@remote-agents/rpc-driver": "workspace:*",
+        "@remote-agents/surfaces": "workspace:*",
+      },
+    },
+    "packages/surfaces": {
+      "name": "@remote-agents/surfaces",
+      "version": "0.1.0",
+      "dependencies": {
+        "@remote-agents/protocol": "workspace:*",
+      },
+    },
+  },
+  "packages": {
+    "@remote-agents/extension": ["@remote-agents/extension@workspace:packages/extension"],
+
+    "@remote-agents/protocol": ["@remote-agents/protocol@workspace:packages/protocol"],
+
+    "@remote-agents/rpc-driver": ["@remote-agents/rpc-driver@workspace:packages/rpc-driver"],
+
+    "@remote-agents/server": ["@remote-agents/server@workspace:packages/server"],
+
+    "@remote-agents/surfaces": ["@remote-agents/surfaces@workspace:packages/surfaces"],
+
+    "@types/node": ["@types/node@26.4.0", "https://orbit-flutter-af768sf2xs.fbr.land/npm/npm-proxy/@types/node/-/node-26.4.0.tgz", { "dependencies": { "undici-types": "~8.3.0" } }, "sha512-faiGnoIrLH/V8cibOMEAZ8pMw6oXqSukl29ra4mN8GdaB2ZewzeaLj+INpV5N+Z1eKWzY+IzaIZH2EIR6YZRNQ=="],
+
+    "bun-types": ["bun-types@1.4.0", "https://orbit-flutter-af768sf2xs.fbr.land/npm/npm-proxy/bun-types/-/bun-types-1.4.0.tgz", { "dependencies": { "@types/node": "*" } }, "sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q=="],
+
+    "typebox": ["typebox@1.3.23", "https://orbit-flutter-af768sf2xs.fbr.land/npm/npm-proxy/typebox/-/typebox-1.3.23.tgz", {}, "sha512-eMDZIb3EhHxm/tQ+xfbb++B+1KMpquxYoRQ0nHWukMmNxrYHsbRQwW15chb2doi0FdJ/MxDXpgZRFJUyizMkkw=="],
+
+    "undici-types": ["undici-types@8.3.0", "https://orbit-flutter-af768sf2xs.fbr.land/npm/npm-proxy/undici-types/-/undici-types-8.3.0.tgz", {}, "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ=="],
+  }
+}

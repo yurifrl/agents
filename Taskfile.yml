@@ -16,7 +16,7 @@ tasks:
   generate:
     desc: Generate DeepCopy methods for API types
     cmds:
-      - "{{.CONTROLLER_GEN}} object:headerFile=hack/boilerplate.go.txt paths=./api/..."
+      - "{{.CONTROLLER_GEN}} object:headerFile=hack/boilerplate.go.txt paths=./api/... paths=./internal/agentmd/..."
 
   manifests:
     desc: Generate CRDs and RBAC into config/

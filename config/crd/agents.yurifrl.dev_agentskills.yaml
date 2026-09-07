@@ -1,0 +1,114 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: agentskills.agents.yurifrl.dev
+spec:
+  group: agents.yurifrl.dev
+  names:
+    kind: AgentSkill
+    listKind: AgentSkillList
+    plural: agentskills
+    shortNames:
+    - ask
+    singular: agentskill
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.description
+      name: Description
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: AgentSkill is a reusable, composable unit of agent instructions
+          and tool policy.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              AgentSkillSpec is a reusable bundle of instructions and tool policy that can
+              be composed into an agent definition.
+            properties:
+              description:
+                description: Description is a short human-readable summary of the
+                  skill.
+                minLength: 1
+                type: string
+              instructions:
+                description: |-
+                  Instructions is the markdown body appended to the agent instruction as a
+                  "## Skill: <name>" section during composition.
+                minLength: 1
+                type: string
+              tools:
+                description: |-
+                  Tools are tool grants contributed by this skill. Grants for the same tool
+                  are merged across the definition and all skills (union of allow rules and
+                  hosts, strictest non-zero limits).
+                items:
+                  description: ToolGrant declares one tool the agent may use, with
+                    optional constraints.
+                  properties:
+                    allow:
+                      items:
+                        items:
+                          type: string
+                        type: array
+                      type: array
+                    allowHosts:
+                      items:
+                        type: string
+                      type: array
+                    cooldown:
+                      type: string
+                    maxCalls:
+                      type: integer
+                    name:
+                      type: string
+                    timeout:
+                      type: string
+                    urlFromEnv:
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+            required:
+            - description
+            - instructions
+            type: object
+          status:
+            description: AgentSkillStatus defines the observed state of an AgentSkill.
+            properties:
+              observedGeneration:
+                description: ObservedGeneration is the spec generation last reconciled.
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
