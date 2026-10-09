@@ -52,12 +52,19 @@ extension). Tests may spawn fixtures from other packages **by path only**
   - Observed reality (installed omp, pi core 0.84.4): `agent_settled` documented but **never emitted**; `agent_end` is the last lifecycle event of every turn. Consumers must not rely on `agent_settled` alone (see §4 settle).
   - Errors: `class OmpRpcError extends Error { code: string }` with codes `handshake_timeout | request_timeout | request_failed | channel_closed`.
 - `test/fake-omp.ts` — deterministic fake worker: `bun fake-omp.ts [--settled-delay MS] [--tool NAME] [--exit-after SETTLED N] [--resume-crash]`. Emits: `ready` frame; on `prompt` request → response + `agent_start`, one `tool_execution_start/end` (if `--tool`), `message_end` with assistant text `"FAKE_RESULT=<first 32 chars of prompt>"`, `agent_end`, `agent_settled`; answers `get_state` (isStreaming false), `get_last_assistant_text`, `steer`, `abort` (emits `agent_settled` immediately). Used by A, B, and integration tests **by path** `packages/rpc-driver/test/fake-omp.ts`.
-  - `packages/server/test/local-fake-omp.ts` extends the shape with `--no-settled` (never emits `agent_settled` — mirrors the installed omp build) for the quiet-window regression test; also `--double-settled`, `--tcp` (bridge emulation).
+  - The Go server's fixtures (`internal/server/fixture_test.go`, `internal/rpc/rpc_test.go`) cover the same shapes: settled/quiet/crash/steer/hang/busy modes.
 - Tests (bun test): framing chunk-boundary split, handshake timeout, request correlation, steer/abort, fake-omp end-to-end prompt→result.
 
 ## 3. surfaces [A]
 
-`packages/surfaces/src/`:
+**Moved to Go (2026-09-17 unification):** `internal/surface/` — `process.go`,
+`herdr.go`, `k8s.go`, and `bridge/` (the ported `renderBridgeScript()`, byte
+identical). The TS `packages/surfaces` was deleted. Semantics unchanged below,
+plus a new `k8s` surface: worker Pod running `agents worker` (omp RPC over TCP
+on :8080) + Service; the server dials the pod IP; re-adoption dials
+`meta.host:port`.
+
+Former `packages/surfaces/src/` (contract record):
 
 - `index.ts` — `createSurface(kind: SurfaceKind, opts: SurfaceOpts): Surface` where kind ∈ `"process" | "herdr"`; `opts: { ompBin, bridgePath, stateDir, workspace?, herdrBin? }`. Auto-selection lives in the server (config), NOT here.
 - `process.ts` — `ProcessSurface`: spawn `omp --mode rpc --session-dir <sessionDir> --no-pty --auto-approve [--max-time <s>] [--model <m>]` via `Bun.spawn` with piped stdio → `Channel` from `proc.stdout`/`proc.stdin`. `stop()`: SIGTERM → 3s → SIGKILL. Expose `pid`. Environment: pass `REMOTE_AGENTS_WORKER=1`, `REMOTE_AGENTS_TASK_ID`.
@@ -74,7 +81,13 @@ extension). Tests may spawn fixtures from other packages **by path only**
 
 ## 4. server [B]
 
-`packages/server/src/`:
+**Moved to Go (2026-09-17 unification):** `internal/server/` (store,
+supervisor, HTTP+SSE handler) + `internal/rpc/` (driver) + `cmd/agents
+server|worker`. The TS `packages/server` was deleted; `REMOTE_AGENTS_SURFACE`
+now also accepts `k8s`; the extension spawns the Go binary
+(`REMOTE_AGENTS_SERVER_BIN` → `agents` on PATH). Semantics unchanged below.
+
+Former `packages/server/src/` (contract record):
 
 - `config.ts` — env: `REMOTE_AGENTS_PORT` (default `protocol.DEFAULT_PORT` 8679), `REMOTE_AGENTS_STATE_DIR` (`~/.remote-agents`), `REMOTE_AGENTS_SURFACE` (`auto|process|herdr`; `auto` = herdr if `herdr` on PATH else process), `REMOTE_AGENTS_OMP_BIN` (`omp`), `REMOTE_AGENTS_MODEL`, `REMOTE_AGENTS_MAX_TIME_S` (1800), `REMOTE_AGENTS_URL` (server self-URL for logs).
 - `store.ts` — `TaskStore(stateDir)`:

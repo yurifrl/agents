@@ -2,8 +2,13 @@
   "name": "remote-agents",
   "private": true,
   "workspaces": ["packages/*"],
+  "omp": {
+    "extensions": ["./packages/extension/src/index.ts"]
+  },
+  "pi": {
+    "extensions": ["./packages/extension/src/index.ts"]
+  },
   "scripts": {
-    "server": "bun packages/server/src/main.ts",
     "test": "bun test packages/",
     "typecheck": "tsc --noEmit"
   },

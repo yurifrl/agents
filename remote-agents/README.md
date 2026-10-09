@@ -7,7 +7,7 @@ with a native-feeling UI and resume-after-restart.
 omp session (extension: remote-agents)
   │ RemoteAgent tools · widget · /remote-agents commands · session_start reconcile
   ▼ HTTP + SSE (127.0.0.1:8679)
-agent server (bun)
+agents server (Go binary, `agents server`)
   ├─ TaskStore (durable JSON + event logs, cursor replay)
   ├─ Supervisor (spawn/steer/cancel/re-adoption)
   └─ Surfaces: process (child of server) · herdr (omp in a herdr pane,
@@ -18,12 +18,14 @@ agent server (bun)
 
 ## Pieces
 
+The server is part of the Go `agents` binary (repo root: `internal/server`,
+`internal/rpc`, `internal/surface`, `internal/protocol`). This directory keeps
+the TypeScript half:
+
 | Package | What it is |
 |---|---|
 | `packages/protocol` | shared types + wire constants (pure) |
 | `packages/rpc-driver` | omp RPC client: framing, handshake, prompt/steer/abort, settle on `agent_settled` or `agent_end` quiet window |
-| `packages/surfaces` | worker surfaces: direct process · herdr pane + TCP bridge |
-| `packages/server` | HTTP API, durable store, supervisor, re-adoption on boot |
 | `packages/extension` | the omp extension (widget, tools, `/remote-agents`, reconcile) |
 
 `CONTRACT.md` is the architecture record: interfaces, wire formats, decisions,
@@ -32,8 +34,9 @@ deliberate v1 limits.
 ## Run
 
 ```bash
-bun install                                  # workspace deps
-bun run server                               # or: remote-agents-server (see install)
+go build -o agents ../cmd/agents            # from repo root: go build -o agents ./cmd/agents
+./agents server                              # or let the extension spawn it on demand
+bun install                                  # workspace deps (extension/protocol/rpc-driver)
 bash scripts/install-extension.sh            # symlink extension into ~/.omp/agent/extensions/
 ```
 
@@ -56,6 +59,7 @@ Then in any omp session:
 | `REMOTE_AGENTS_MODEL` | (parent default) | worker model |
 | `REMOTE_AGENTS_MAX_TIME_S` | `1800` | worker wall-clock limit |
 | `REMOTE_AGENTS_OWNER` | `$USER` | task owner (resume key) |
+| `REMOTE_AGENTS_SERVER_BIN` | `agents` on PATH | server binary the extension spawns |
 
 ## Statefulness model
 
