@@ -297,7 +297,7 @@ export async function createFixtureServer(): Promise<FixtureServer> {
 export function useFixture(server: FixtureServer): void {
   process.env[ENV.url] = server.url;
   process.env[ENV.owner] = "local";
-  delete process.env[ENV.serverEntry];
+  delete process.env[ENV.serverBin];
   resetRuntimeForTests();
 }
 
@@ -380,6 +380,7 @@ export interface MockCtx {
   ctx: {
     ui: {
       setWidget(key: string, content: string[] | undefined, options?: { placement?: string }): void;
+      setStatus(key: string, text: string): void;
       notify(message: string, level?: "info" | "warning" | "error"): void;
     };
     mode: "tui";
@@ -390,6 +391,7 @@ export interface MockCtx {
   widgets: Map<string,
     string[] | ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined
   >;
+  statuses: Map<string, string>;
   notifications: Array<{ message: string; level: "info" | "warning" | "error" | undefined }>;
 }
 
@@ -402,6 +404,7 @@ export function createMockCtx(opts?: {
     string,
     string[] | ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined
   >();
+  const statuses = new Map<string, string>();
   const notifications: Array<{ message: string; level: "info" | "warning" | "error" | undefined }> = [];
   const sessionFile = opts?.sessionFile !== undefined ? opts.sessionFile : "/tmp/parent/session.jsonl";
   const ctx: MockCtx["ctx"] = {
@@ -414,6 +417,9 @@ export function createMockCtx(opts?: {
           | undefined,
       ): void {
         widgets.set(key, content);
+      },
+      setStatus(key: string, text: string): void {
+        statuses.set(key, text);
       },
       notify(message: string, level?: "info" | "warning" | "error"): void {
         notifications.push({ message, level });
@@ -428,7 +434,7 @@ export function createMockCtx(opts?: {
       },
     },
   };
-  return { ctx, widgets, notifications };
+  return { ctx, widgets, statuses, notifications };
 }
 
 /** Invoke a captured tool the way omp would. */

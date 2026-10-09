@@ -1,6 +1,7 @@
-// Test-only server entry for ensureServer bootstrap: binds the port the
-// extension client expects, serves /health, and writes its pid so the test
-// can clean up the detached process.
+#!/usr/bin/env bun
+// Test-only server binary stand-in for ensureServer bootstrap: binds the port
+// the extension client expects, serves /health, and writes its pid so the test
+// can clean up the detached process. Spawned as `<this-file> server`.
 
 import { ENV } from "@remote-agents/protocol";
 import { writeFileSync } from "node:fs";
@@ -34,4 +35,4 @@ Bun.serve({
   },
 });
 
-console.log(`fixture server entry listening on ${port}`);
+console.log(`fixture server binary listening on ${port}`);

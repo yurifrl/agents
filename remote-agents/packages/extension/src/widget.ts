@@ -8,7 +8,7 @@ import {
   type Task,
   type TaskStatus,
   type TaskEvent,
-} from "@remote-agents/protocol";
+} from "../../protocol/src/index.ts";
 import { fieldOf } from "./deliver.ts";
 
 export const WIDGET_MAX_ROWS = 8;

@@ -16,9 +16,10 @@ import {
   type SseFrame,
   type Task,
   type TaskStatus,
-} from "@remote-agents/protocol";
+} from "../../protocol/src/index.ts";
 import { Type, type Static, type TSchema } from "typebox";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { configPath, readConfig, writeConfig } from "./config.ts";
 import { ApiError, ensureServer } from "./api.ts";
 import {
   describeTask,
@@ -63,6 +64,8 @@ interface PiUI {
       | undefined,
     options?: { placement?: "aboveEditor" | "belowEditor" },
   ): void;
+  /** Persistent statusline chip, keyed (graft-style); text carries the label. */
+  setStatus(key: string, text: string): void;
   notify(message: string, level?: "info" | "warning" | "error"): void;
 }
 
@@ -150,6 +153,10 @@ const SteerParams = Type.Object({
 // ---------------------------------------------------------------------------
 
 export default function remoteAgentsExtension(pi: PiExtensionAPI): void {
+  // remote-agents.json: `{ "enabled": false }` makes this a no-op factory.
+  const config = readConfig();
+  if (!config.enabled) return;
+
   registerTools(pi);
   registerCommand(pi);
   registerRenderer(pi);
@@ -167,26 +174,39 @@ export default function remoteAgentsExtension(pi: PiExtensionAPI): void {
 // session_start reconcile
 // ---------------------------------------------------------------------------
 
+/** Statusline chip (graft-style): the session's connection state at a glance. */
+function setConnectionStatus(ctx: PiContext, connected: boolean): void {
+  if (!ctx.hasUI) return;
+  ctx.ui.setStatus(
+    "remote-agents",
+    connected ? "📡 connected" : "📡 disconnected — /remote-agents connect",
+  );
+}
+
 /**
- * ensureServer -> attach(owner) -> subscribe active tasks -> deliver+ack
- * terminal unacknowledged ones -> widget loop.
+ * Attach + subscribe + deliver + widget. Assumes the server is already
+ * reachable (session_start probes first; /remote-agents connect spawns).
+ * Returns true once `rt.connected` is set and the session is wired up.
  */
-async function reconcile(pi: PiExtensionAPI, ctx: PiContext): Promise<void> {
-  const rt = ensureRuntime();
-  try {
-    await ensureServer(rt.client, { serverEntry: resolveServerEntry(), stateDir: resolveStateDir() });
-  } catch (error) {
-    // Server unavailable: disable quietly for this session, never throw.
-    ctx.ui.notify(`remote-agents disabled: ${errorMessage(error)}`, "error");
-    return;
-  }
+async function connectAndSync(
+  pi: PiExtensionAPI,
+  rt: RemoteAgentsRuntime,
+  ctx: PiContext,
+  options: { notify: boolean },
+): Promise<boolean> {
   let tasks: Task[];
   try {
     tasks = (await rt.client.attach(resolveOwner())).tasks;
   } catch (error) {
-    ctx.ui.notify(`remote-agents: attach failed: ${errorMessage(error)}`, "error");
-    return;
+    rt.connected = false;
+    setConnectionStatus(ctx, false);
+    if (options.notify) {
+      ctx.ui.notify(`remote-agents: attach failed: ${errorMessage(error)}`, "error");
+    }
+    return false;
   }
+  rt.connected = true;
+  setConnectionStatus(ctx, true);
   for (const task of tasks) {
     if (isActiveStatus(task.status)) {
       subscribeTask(pi, rt, task.id);
@@ -195,6 +215,38 @@ async function reconcile(pi: PiExtensionAPI, ctx: PiContext): Promise<void> {
     }
   }
   if (ctx.hasUI) startWidgetTimer(rt, ctx);
+  if (options.notify) {
+    const active = tasks.filter((task) => isActiveStatus(task.status)).length;
+    ctx.ui.notify(
+      active > 0 ? `📡 remote-agents: connected — ${active} active task(s).` : "📡 remote-agents: connected.",
+      "info",
+    );
+  }
+  return true;
+}
+
+/**
+ * session_start connects once: a single quiet health probe, attach when up,
+ * otherwise stay silent and mark the chip disconnected. Never spawns — the
+ * only spawn path is the explicit /remote-agents connect (mcp-style).
+ */
+async function reconcile(pi: PiExtensionAPI, ctx: PiContext): Promise<void> {
+  const rt = ensureRuntime();
+  let up = false;
+  try {
+    await rt.client.health(500);
+    up = true;
+  } catch {
+    // not up — handled below
+  }
+  if (!up) {
+    // Server not up: do nothing (contract §5) — no spawn, no error, no retry.
+    // The chip says how to connect; the user decides when.
+    rt.connected = false;
+    setConnectionStatus(ctx, false);
+    return;
+  }
+  await connectAndSync(pi, rt, ctx, { notify: false });
 }
 
 /**
@@ -347,11 +399,19 @@ function registerTools(pi: PiExtensionAPI): void {
   pi.registerTool(killTool());
 }
 
+const NOT_CONNECTED_HINT =
+  "remote-agents: not connected — the server is not running. Run /remote-agents connect to start it.";
+
 function toolText(
   text: string,
   details?: unknown,
 ): { content: Array<{ type: "text"; text: string }>; details?: unknown } {
   return { content: [{ type: "text", text }], details };
+}
+
+/** Plain refusal for tools fired before any connect — no request, no spawn. */
+function guardConnected(rt: RemoteAgentsRuntime): string | undefined {
+  return rt.connected ? undefined : NOT_CONNECTED_HINT;
 }
 
 function spawnTool(pi: PiExtensionAPI): PiToolDef<typeof SpawnParams> {
@@ -367,6 +427,8 @@ function spawnTool(pi: PiExtensionAPI): PiToolDef<typeof SpawnParams> {
     parameters: SpawnParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const rt = ensureRuntime();
+      const blocked = guardConnected(rt);
+      if (blocked != null) return toolText(blocked);
       const input: CreateTaskInput = {
         owner: resolveOwner(),
         name: params.name,
@@ -380,7 +442,7 @@ function spawnTool(pi: PiExtensionAPI): PiToolDef<typeof SpawnParams> {
         task = await rt.client.create(input);
       } catch (error) {
         throw new Error(
-          `RemoteAgent spawn failed: ${errorMessage(error)} (the server auto-starts on session_start; check /remote-agents)`,
+          `RemoteAgent spawn failed: ${errorMessage(error)} (run /remote-agents connect to (re)start the server)`,
         );
       }
       subscribeTask(pi, rt, task.id);
@@ -402,6 +464,8 @@ function listTool(): PiToolDef<typeof EmptyParams> {
     parameters: EmptyParams,
     async execute() {
       const rt = ensureRuntime();
+      const blocked = guardConnected(rt);
+      if (blocked != null) return toolText(blocked);
       try {
         const tasks = await rt.client.list(resolveOwner());
         if (tasks.length === 0) return toolText("No remote agents.");
@@ -422,6 +486,8 @@ function getTool(): PiToolDef<typeof IdParams> {
     parameters: IdParams,
     async execute(_toolCallId, params) {
       const rt = ensureRuntime();
+      const blocked = guardConnected(rt);
+      if (blocked != null) return toolText(blocked);
       try {
         const task = await rt.client.get(params.id);
         const lines = [
@@ -451,6 +517,8 @@ function steerTool(): PiToolDef<typeof SteerParams> {
     parameters: SteerParams,
     async execute(_toolCallId, params) {
       const rt = ensureRuntime();
+      const blocked = guardConnected(rt);
+      if (blocked != null) return toolText(blocked);
       try {
         const task = await rt.client.steer(params.id, params.message);
         return toolText(`Steered "${task.name}" (${params.id}): ${params.message}`);
@@ -472,6 +540,8 @@ function killTool(): PiToolDef<typeof IdParams> {
     parameters: IdParams,
     async execute(_toolCallId, params) {
       const rt = ensureRuntime();
+      const blocked = guardConnected(rt);
+      if (blocked != null) return toolText(blocked);
       try {
         const task = await rt.client.cancel(params.id);
         return toolText(`Kill requested for "${task.name}" (${params.id}); it will be canceled shortly.`);
@@ -491,7 +561,8 @@ function killTool(): PiToolDef<typeof IdParams> {
 
 function registerCommand(pi: PiExtensionAPI): void {
   pi.registerCommand("remote-agents", {
-    description: "Manage remote agents: /remote-agents [steer <id> <message> | kill <id> | logs <id> | attach <id>]",
+    description:
+      "Manage remote agents: /remote-agents [connect | on | off | steer <id> <message> | kill <id> | logs <id> | attach <id>] (bare /remote-agents lists; connect starts the server if it is not running)",
     handler: (args, ctx) => handleAgentsCommand(pi, args, ctx),
   });
 }
@@ -501,6 +572,35 @@ async function handleAgentsCommand(pi: PiExtensionAPI, args: string, ctx: PiCont
   const command = parseAgentsArgs(args);
   if (command.verb === "error") {
     ctx.ui.notify(`remote-agents: ${command.message}`, "warning");
+    return;
+  }
+  if (command.verb === "connect") {
+    // The only place a server is ever spawned: explicit user action
+    // (mcp-style). ensureServer health-checks first and spawns only when the
+    // port is dead, then connectAndSync wires this session up.
+    try {
+      await ensureServer(rt.client, { serverBin: resolveServerBin(), stateDir: resolveStateDir() });
+    } catch (error) {
+      rt.connected = false;
+      setConnectionStatus(ctx, false);
+      ctx.ui.notify(`remote-agents: connect failed: ${errorMessage(error)}`, "error");
+      return;
+    }
+    await connectAndSync(pi, rt, ctx, { notify: true });
+    return;
+  }
+  if (command.verb === "on" || command.verb === "off") {
+    const enabled = command.verb === "on";
+    writeConfig({ ...readConfig(), enabled });
+    ctx.ui.notify(
+      `Remote agents ${enabled ? "enabled" : "disabled"} in ${configPath()} — takes effect next session start.`,
+      "info",
+    );
+    return;
+  }
+  // Remaining verbs (list/steer/kill/logs/attach) all hit the server.
+  if (!rt.connected) {
+    ctx.ui.notify(NOT_CONNECTED_HINT, "warning");
     return;
   }
   if (command.verb === "list") {
@@ -649,11 +749,10 @@ function resolveOwner(): string {
   return process.env[ENV.owner] ?? process.env.USER ?? "local";
 }
 
-function resolveServerEntry(): string {
-  const fromEnv = process.env[ENV.serverEntry];
+function resolveServerBin(): string {
+  const fromEnv = process.env[ENV.serverBin];
   if (fromEnv != null && fromEnv !== "") return fromEnv;
-  // packages/extension/src/index.ts -> packages/server/src/main.ts
-  return join(dirname(Bun.fileURLToPath(import.meta.url)), "..", "..", "server", "src", "main.ts");
+  return "agents";
 }
 
 function resolveStateDir(): string {

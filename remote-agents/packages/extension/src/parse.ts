@@ -1,19 +1,25 @@
 // Pure parser for /remote-agents command arguments (contract §5).
 
 export type AgentsCommand =
+  | { verb: "connect" }
   | { verb: "list" }
   | { verb: "steer"; id: string; message: string }
   | { verb: "kill"; id: string }
   | { verb: "logs"; id: string }
   | { verb: "attach"; id: string }
+  | { verb: "on" }
+  | { verb: "off" }
   | { verb: "error"; message: string };
 
 const USAGE =
-  "usage: /remote-agents [steer <id> <message> | kill <id> | logs <id> | attach <id>] (bare /remote-agents lists)";
+  "usage: /remote-agents [connect | on | off | steer <id> <message> | kill <id> | logs <id> | attach <id>] (bare /remote-agents lists)";
 
 export function parseAgentsArgs(args: string): AgentsCommand {
   const input = args.trim();
   if (input === "") return { verb: "list" };
+  if (input === "connect") return { verb: "connect" };
+  if (input === "on") return { verb: "on" };
+  if (input === "off") return { verb: "off" };
 
   const steer = /^steer\s+(\S+)\s+(\S[\s\S]*)$/.exec(input);
   if (steer?.[1] != null && steer[2] != null) {

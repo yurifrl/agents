@@ -143,7 +143,7 @@ describe("ensureServer", () => {
   test("does not spawn when health already passes", async () => {
     const client = createClient();
     const before = server.requests.length;
-    await ensureServer(client, { serverEntry: "/nonexistent.ts", stateDir: "/tmp/ra-healthy" });
+    await ensureServer(client, { serverBin: "/nonexistent-agents-binary", stateDir: "/tmp/ra-healthy" });
     expect(server.requests.length).toBe(before + 1);
   });
 
@@ -159,7 +159,7 @@ describe("ensureServer", () => {
     try {
       const client = createClient();
       await ensureServer(client, {
-        serverEntry: join(import.meta.dir, "fixtures", "server-entry.ts"),
+        serverBin: join(import.meta.dir, "fixtures", "server-entry.ts"),
         stateDir,
       });
       const health = await client.health();

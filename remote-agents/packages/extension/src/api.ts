@@ -12,8 +12,8 @@ import {
   type HealthResponse,
   type SseFrame,
   type Task,
-} from "@remote-agents/protocol";
-import { closeSync, mkdirSync, openSync } from "node:fs";
+} from "../../protocol/src/index.ts";
+import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { join } from "node:path";
 
 /** A request reached the server but answered with an error status. */
@@ -50,8 +50,8 @@ export interface RemoteAgentsClient {
 }
 
 export interface EnsureServerOptions {
-  /** Server entry script (packages/server/src/main.ts). */
-  serverEntry: string;
+  /** Server binary; `REMOTE_AGENTS_SERVER_BIN` override or `agents` from PATH. */
+  serverBin: string;
   /** State dir; server logs are appended to <stateDir>/logs/server.log. */
   stateDir: string;
 }
@@ -169,20 +169,30 @@ function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
 
 /**
  * Make sure a server is listening at the client's URL: health-check first
- * (1s timeout); when it does not answer, spawn `bun <serverEntry>` detached
+ * (1s timeout); when it does not answer, spawn the Go server binary detached
  * with logs appended to <stateDir>/logs/server.log, then poll health for up
  * to 5s. Never spawns when the health check already passes.
  */
-
 export async function ensureServer(client: RemoteAgentsClient, opts: EnsureServerOptions): Promise<void> {
   if (await isHealthy(client, 1_000)) return;
+
+  // The parent executable is NOT a safe fallback: inside omp it is the omp
+  // binary, which would interpret a `server` argument as a prompt and boot a
+  // full agent session instead of the server.
+  const serverBin = Bun.which(opts.serverBin) ?? opts.serverBin;
+  if (serverBin === "" || !existsSync(serverBin)) {
+    throw new ServerUnreachable(
+      `remote-agents server binary not found (${opts.serverBin}); build it with 'go build -o agents ./cmd/agents' ` +
+        `or point ${ENV.serverBin} at the binary`,
+    );
+  }
 
   const logsDir = join(opts.stateDir, LOGS_DIRNAME);
   const logPath = join(logsDir, "server.log");
   mkdirSync(logsDir, { recursive: true });
   const logFd = openSync(logPath, "a");
   try {
-    const child = Bun.spawn([process.execPath, opts.serverEntry], {
+    const child = Bun.spawn([serverBin, "server"], {
       stdin: "ignore",
       stdout: logFd,
       stderr: logFd,
@@ -203,7 +213,7 @@ export async function ensureServer(client: RemoteAgentsClient, opts: EnsureServe
     if (Date.now() >= deadline) break;
   }
   throw new ServerUnreachable(
-    `no remote-agents server at ${client.baseUrl} within 5s (spawned ${opts.serverEntry}; logs: ${logPath})`,
+    `no remote-agents server at ${client.baseUrl} within 5s (spawned ${serverBin} server; logs: ${logPath})`,
   );
 }
 

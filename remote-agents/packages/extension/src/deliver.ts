@@ -2,7 +2,7 @@
 // task/event lines. No IO, no clock injection required beyond the optional
 // `now` parameter (tests pass explicit values).
 
-import { isTerminalStatus, type Task, type TaskEvent, type TaskStatus } from "@remote-agents/protocol";
+import { isTerminalStatus, type Task, type TaskEvent, type TaskStatus } from "../../protocol/src/index.ts";
 
 export interface ResultDetails {
   taskId: string;

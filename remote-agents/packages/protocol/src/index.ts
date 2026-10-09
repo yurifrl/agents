@@ -30,7 +30,7 @@ export function isTerminalStatus(status: TaskStatus): boolean {
 }
 
 /** How the worker process is hosted. */
-export type SurfaceKind = "process" | "herdr";
+export type SurfaceKind = "process" | "herdr" | "k8s";
 
 export interface TaskWorkerMeta {
   pid?: number;
@@ -41,6 +41,8 @@ export interface TaskWorkerMeta {
   port?: number;
   /** herdr surface: bound-port file path */
   portFile?: string;
+  /** k8s surface: pod IP (dial target; default loopback) */
+  host?: string;
 }
 
 export interface Task {
@@ -205,7 +207,8 @@ export const ENV = {
   model: "REMOTE_AGENTS_MODEL",
   maxTimeS: "REMOTE_AGENTS_MAX_TIME_S",
   owner: "REMOTE_AGENTS_OWNER",
-  serverEntry: "REMOTE_AGENTS_SERVER_ENTRY",
+  /** Server binary override; default resolves `agents` from PATH. */
+  serverBin: "REMOTE_AGENTS_SERVER_BIN",
 } as const;
 
 export const STATE_DIR_FILENAME = "state.json";

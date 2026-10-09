@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ENV } from "@remote-agents/protocol";
 import remoteAgentsExtension, { startWidgetTimer, widgetTick } from "../src/index.ts";
 import type { PiExtensionAPI } from "../src/index.ts";
@@ -8,6 +11,7 @@ import {
   createFixtureServer,
   createMockCtx,
   createMockPi,
+  runTool,
   startSession,
   useFixture,
   waitFor,
@@ -20,16 +24,24 @@ const PARENT_SESSION = "/tmp/parent/session.jsonl";
 
 let server: FixtureServer;
 let mock: MockPi;
+let testHome: string;
+let realHome: string | undefined;
 
 beforeEach(async () => {
   server = await createFixtureServer();
   useFixture(server);
+  // Isolate remote-agents.json reads from the real agent dir.
+  testHome = mkdtempSync(join(tmpdir(), "ra-runtime-home-"));
+  realHome = process.env.HOME;
+  process.env.HOME = testHome;
   mock = createMockPi();
   remoteAgentsExtension(mock.pi as unknown as PiExtensionAPI);
 });
 
 afterEach(async () => {
   resetRuntimeForTests();
+  process.env.HOME = realHome;
+  rmSync(testHome, { recursive: true, force: true });
   await server.close();
 });
 
@@ -119,17 +131,51 @@ describe("session_start reconcile", () => {
     expect(content).toContain("/remote-agents logs t-fail");
   });
 
-  test("unreachable server notifies an error and disables for the session", async () => {
+  test("unreachable server stays silent and marks the chip disconnected", async () => {
     process.env[ENV.url] = "http://127.0.0.1:1";
-    process.env[ENV.serverEntry] = "/nonexistent/remote-agents-server.ts";
+    // Guard against accidental spawns: even if reconcile tried to spawn, this
+    // entry does not exist and the test would notice via the error path.
+    process.env[ENV.serverBin] = "/nonexistent/agents";
     resetRuntimeForTests();
     const ctx = createMockCtx();
     await startSession(mock, ctx);
-    const disabled = ctx.notifications.find((n) => n.level === "error");
-    expect(disabled?.message).toContain("remote-agents disabled");
+    expect(ctx.notifications).toHaveLength(0);
+    expect(ctx.statuses.get("remote-agents")).toBe("📡 disconnected — /remote-agents connect");
+    expect(ensureRuntime().connected).toBe(false);
     expect(mock.sent).toHaveLength(0);
-    delete process.env[ENV.serverEntry];
+    delete process.env[ENV.serverBin];
   }, 15_000);
+
+  test("reachable server connects and marks the chip connected", async () => {
+    const ctx = createMockCtx();
+    await startSession(mock, ctx);
+    expect(ctx.statuses.get("remote-agents")).toBe("📡 connected");
+    expect(ensureRuntime().connected).toBe(true);
+    expect(ctx.notifications).toHaveLength(0);
+  });
+
+  test("tools refuse to fire while disconnected and never spawn", async () => {
+    process.env[ENV.url] = "http://127.0.0.1:1";
+    resetRuntimeForTests();
+    const ctx = createMockCtx();
+    await startSession(mock, ctx);
+    const result = await runTool(mock.tools.get("RemoteAgent")!, { name: "x", task: "y" }, ctx);
+    expect(result.content[0]?.text).toContain("not connected");
+    expect(result.content[0]?.text).toContain("/remote-agents connect");
+    const list = await runTool(mock.tools.get("RemoteAgentList")!, {}, ctx);
+    expect(list.content[0]?.text).toContain("not connected");
+  });
+
+  test("/remote-agents connect attaches and confirms", async () => {
+    server.seedTask({ id: "t-live", status: "running", startedAt: Date.now() - 1_000, parentSession: PARENT_SESSION });
+    const ctx = createMockCtx();
+    await startSession(mock, ctx);
+    const handler = mock.commands.get("remote-agents")!.handler;
+    await handler("connect", ctx.ctx);
+    expect(ctx.statuses.get("remote-agents")).toBe("📡 connected");
+    expect(ctx.notifications.some((n) => n.message.includes("connected"))).toBe(true);
+    expect(ctx.notifications.some((n) => n.message.includes("1 active"))).toBe(true);
+  });
 
   test("orphan task with unknown parent is adopted by this session", async () => {
     server.seedTask({ id: "t-orphan", status: "running", startedAt: Date.now() - 1_000 });

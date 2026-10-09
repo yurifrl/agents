@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ENV } from "@remote-agents/protocol";
 import remoteAgentsExtension from "../src/index.ts";
 import type { PiExtensionAPI } from "../src/index.ts";
@@ -9,6 +12,7 @@ import {
   createMockCtx,
   createMockPi,
   runTool,
+  startSession,
   useFixture,
   waitFor,
   type FixtureServer,
@@ -19,16 +23,27 @@ import {
 
 let server: FixtureServer;
 let mock: MockPi;
+let testHome: string;
+let realHome: string | undefined;
 
 beforeEach(async () => {
   server = await createFixtureServer();
   useFixture(server);
+  // Isolate remote-agents.json reads from the real agent dir.
+  testHome = mkdtempSync(join(tmpdir(), "ra-tools-home-"));
+  realHome = process.env.HOME;
+  process.env.HOME = testHome;
   mock = createMockPi();
   remoteAgentsExtension(mock.pi as unknown as PiExtensionAPI);
+  // New contract: tools fire only after a connect. The fixture server is up,
+  // so the session_start health probe connects once for every test.
+  await startSession(mock, createMockCtx());
 });
 
 afterEach(async () => {
   resetRuntimeForTests();
+  process.env.HOME = realHome;
+  rmSync(testHome, { recursive: true, force: true });
   await server.close();
 });
 
@@ -87,12 +102,14 @@ describe("RemoteAgent tool", () => {
     expect(created.model).toBe("anthropic/claude-x");
   });
 
-  test("spawn failure throws (isError) when the server is unreachable", async () => {
+  test("spawn refuses with a hint when disconnected (no request, no spawn)", async () => {
     deadServerEnv();
     const ctx = createMockCtx();
-    await expect(
-      runTool(mock.tools.get("RemoteAgent")!, { name: "x", task: "y" }, ctx),
-    ).rejects.toThrow(/RemoteAgent spawn failed/);
+    const result = await runTool(mock.tools.get("RemoteAgent")!, { name: "x", task: "y" }, ctx);
+    expect(result.content[0]?.text).toContain("not connected");
+    expect(result.content[0]?.text).toContain("/remote-agents connect");
+    // No create request reached anywhere: the guard returns before I/O.
+    expect(server.requests.some((r) => r.method === "POST" && r.path === "/tasks")).toBe(false);
   });
 });
 
@@ -106,11 +123,11 @@ describe("query tools", () => {
     expect(populated.content[0]?.text).toContain('t1  "scout"  running');
   });
 
-  test("RemoteAgentList returns a clear text result when the server is down", async () => {
+  test("RemoteAgentList refuses with the connect hint when the server is down", async () => {
     deadServerEnv();
     const ctx = createMockCtx();
     const result = await runTool(mock.tools.get("RemoteAgentList")!, {}, ctx);
-    expect(result.content[0]?.text).toContain("cannot list agents");
+    expect(result.content[0]?.text).toContain("not connected");
   });
 
   test("RemoteAgentGet renders detail with events; 404 throws", async () => {
@@ -191,6 +208,15 @@ describe("/remote-agents command", () => {
     await waitFor(() => server.requests.some((r) => r.path === "/tasks/t1/stream?since=0"));
     server.pushEvent("t1", "state_changed", { from: "running", to: "completed" });
     await waitFor(() => mock.sent.length === 1);
+  });
+
+  test("server-hitting verbs warn with the connect hint while disconnected", async () => {
+    deadServerEnv();
+    const ctx = createMockCtx();
+    await handler()("", ctx.ctx); // bare = list
+    expect(ctx.notifications.some((n) => n.message.includes("not connected"))).toBe(true);
+    await handler()("steer t1 hi", ctx.ctx);
+    expect(ctx.notifications.some((n) => n.message.includes("not connected"))).toBe(true);
   });
 
   test("unknown verbs and bad args notify a warning", async () => {

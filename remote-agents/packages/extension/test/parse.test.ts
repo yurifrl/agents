@@ -6,6 +6,11 @@ test("empty args mean list", () => {
   expect(parseAgentsArgs("   ")).toEqual({ verb: "list" });
 });
 
+test("connect takes no arguments", () => {
+  expect(parseAgentsArgs("connect")).toEqual({ verb: "connect" });
+  expect(parseAgentsArgs("  connect  ")).toEqual({ verb: "connect" });
+});
+
 test("steer keeps the multi-word message intact", () => {
   expect(parseAgentsArgs("steer t1 fix the build now")).toEqual({
     verb: "steer",

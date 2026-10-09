@@ -3,7 +3,7 @@
 // torn down and rebuilt, while delivery bookkeeping persists).
 
 import { createClient, type RemoteAgentsClient } from "./api.ts";
-import type { Task } from "@remote-agents/protocol";
+import type { Task } from "../../protocol/src/index.ts";
 
 export interface RemoteAgentsRuntime {
   client: RemoteAgentsClient;
@@ -19,6 +19,12 @@ export interface RemoteAgentsRuntime {
   delivered: Set<string>;
   /** Last fetched task list; the widget factory re-renders this live. */
   lastTasks: Task[];
+  /**
+   * True once this session attached to a live server (session_start health
+   * check or /remote-agents connect). Tools refuse to fire while false and
+   * nothing ever spawns a server implicitly.
+   */
+  connected: boolean;
 }
 
 const RUNTIME_KEY = Symbol.for("remote-agents/runtime");
@@ -35,6 +41,7 @@ export function ensureRuntime(): RemoteAgentsRuntime {
     lastSeq: new Map(),
     delivered: new Set(),
     lastTasks: [],
+    connected: false,
   };
   global[RUNTIME_KEY] = created;
   return created;
