@@ -1,5 +1,8 @@
-// Command agents is the multi-tool binary for the remote-agents system.
-// MVP surface: the `controller` subcommand runs the AgentTask controller.
+// Command agents is the control plane for the remote-agents system.
+//
+// Subcommands:
+//   - server:     standalone task server spawning omp workers (process/herdr surface)
+//   - controller: Kubernetes AgentTask controller
 package main
 
 import (
@@ -29,10 +32,8 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.AddCommand(newControllerCmd())
-	root.AddCommand(newEntrypointCmd())
-	root.AddCommand(newGatewayCmd())
-	root.AddCommand(newWorkstratorCmd())
-	root.AddCommand(newMCPCmd())
+	root.AddCommand(newServerCmd())
+	root.AddCommand(newWorkerCmd())
 	return root
 }
 
