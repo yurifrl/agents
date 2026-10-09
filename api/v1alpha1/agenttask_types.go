@@ -18,14 +18,14 @@ const (
 	OutputPR Output = "pr"
 )
 
-// Runtime selects how the agent is executed inside the pod.
-// +kubebuilder:validation:Enum=adk;pi
+// Runtime selects how the agent is executed inside the pod. omp is the only
+// runtime (D0): the pod bridges omp's RPC line protocol over TCP.
+// +kubebuilder:validation:Enum=pi
+// +kubebuilder:default=pi
 type Runtime string
 
 const (
-	// RuntimeADK runs a generic Google ADK agent loop built from the Agent.md.
-	RuntimeADK Runtime = "adk"
-	// RuntimePi shells out to the pi CLI with the Agent.md body as system prompt.
+	// RuntimePi runs omp in RPC mode behind the in-pod worker bridge.
 	RuntimePi Runtime = "pi"
 )
 
@@ -66,9 +66,30 @@ type SkillRef struct {
 	Selector *metav1.LabelSelector `json:"selector,omitempty"`
 }
 
+// RepoSpec declares a git repository to pre-clone into the pod before the
+// agent starts. The clone lands in an emptyDir shared with the agent
+// container at ClonePath (default /workspace/repo), so the agent commits and
+// pushes with its mounted credentials.
+type RepoSpec struct {
+	// URL is the git clone URL (https or ssh).
+	// +kubebuilder:validation:MinLength=1
+	URL string `json:"url"`
+
+	// Ref is the branch, tag, or SHA to check out. Empty clones the default
+	// branch.
+	// +optional
+	Ref string `json:"ref,omitempty"`
+
+	// ClonePath is the in-pod mount path for the clone.
+	// +kubebuilder:default=/workspace/repo
+	// +optional
+	ClonePath string `json:"clonePath,omitempty"`
+}
+
 // AgentTaskSpec defines the desired state of an AgentTask.
 // +kubebuilder:validation:XValidation:rule="has(self.type) != has(self.definition)",message="exactly one of type or definition must be set"
 // +kubebuilder:validation:XValidation:rule="!has(self.type) || has(self.prompt)",message="prompt is required when type (profile mode) is set"
+// +kubebuilder:validation:XValidation:rule="!(has(self.repo) && has(self.repoSpec))",message="at most one of repo or repoSpec must be set"
 type AgentTaskSpec struct {
 	// Type is the agent profile/definition name to run (e.g. "researcher", "worker").
 	// It selects which Agent.md the entrypoint loads. Mutually exclusive with
@@ -112,8 +133,15 @@ type AgentTaskSpec struct {
 
 	// Repo is the git repository the agent operates on (for pr/commit outputs).
 	// Accepts "owner/repo" or a full https URL. Optional for response-only agents.
+	// Mutually exclusive with RepoSpec.
 	// +optional
 	Repo string `json:"repo,omitempty"`
+
+	// RepoSpec declares a git repository pre-cloned into the pod before the
+	// agent starts. Use it when the agent needs a checked-out worktree at a
+	// specific ref. Mutually exclusive with Repo.
+	// +optional
+	RepoSpec *RepoSpec `json:"repoSpec,omitempty"`
 
 	// Output is the externalization contract: response (default), commit, or pr.
 	// +kubebuilder:default=response
@@ -126,8 +154,8 @@ type AgentTaskSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Owner string `json:"owner"`
 
-	// Runtime selects the execution engine. Defaults to adk.
-	// +kubebuilder:default=adk
+	// Runtime selects the execution engine. Only omp (pi) is supported (D0).
+	// +kubebuilder:default=pi
 	// +optional
 	Runtime Runtime `json:"runtime,omitempty"`
 

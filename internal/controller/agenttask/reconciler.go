@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	agentsv1alpha1 "github.com/yurifrl/agents/api/v1alpha1"
+	"github.com/yurifrl/agents/internal/agentmd"
 	"github.com/yurifrl/agents/internal/config"
 )
 
@@ -73,6 +74,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 
+	// Validate the spec before creating anything; an invalid task fails
+	// terminally with the reason in the status message (no pod, no retry).
+	def, err := validateMode(&task)
+	if err != nil {
+		_, rerr := r.setPhase(ctx, &task, agentsv1alpha1.AgentTaskPhaseFailed, err.Error())
+		return ctrl.Result{}, rerr
+	}
+
+	// Inline mode only: resolve skills and compose the deterministic bundle.
+	var bundle *ResolvedBundle
+	if def != nil {
+		skills, err := ResolveSkills(ctx, r.client, task.Namespace, task.Spec.Skills)
+		if err != nil {
+			_, rerr := r.setPhase(ctx, &task, agentsv1alpha1.AgentTaskPhaseFailed, err.Error())
+			return ctrl.Result{}, rerr
+		}
+		bundle = Compose(def, skills)
+	}
+
 	// Max-concurrency guard (ephemeral only): if at capacity and this task has no
 	// pod yet, hold it Pending and requeue.
 	if task.Status.PodName == "" && r.cfg.MaxConcurrent > 0 {
@@ -89,7 +109,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
-	pod, err := r.ensurePod(ctx, &task)
+	pod, err := r.ensurePod(ctx, &task, bundle)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -104,6 +124,34 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	return r.syncStatus(ctx, &task, pod)
+}
+
+// validateMode enforces the profile/inline contract at reconcile time (the CEL
+// rules are the admission-time mirror). Profile mode (Type) requires Prompt and
+// rejects Skills; inline mode (Definition) must parse as an Agent.md document.
+// It returns the parsed definition for inline mode, nil for profile mode.
+func validateMode(task *agentsv1alpha1.AgentTask) (*agentmd.Definition, error) {
+	spec := task.Spec
+	switch {
+	case spec.Type != "" && spec.Definition != "":
+		return nil, fmt.Errorf("exactly one of type or definition must be set")
+	case spec.Type == "" && spec.Definition == "":
+		return nil, fmt.Errorf("exactly one of type or definition must be set")
+	case spec.Type != "":
+		if spec.Prompt == "" {
+			return nil, fmt.Errorf("prompt is required when type (profile mode) is set")
+		}
+		if len(spec.Skills) > 0 {
+			return nil, fmt.Errorf("skills require inline mode (definition)")
+		}
+		return nil, nil
+	default:
+		def, err := agentmd.Parse(spec.Definition)
+		if err != nil {
+			return nil, fmt.Errorf("invalid definition: %w", err)
+		}
+		return def, nil
+	}
 }
 
 // atCapacity reports whether the number of live managed pods meets the limit.
@@ -142,7 +190,7 @@ func (r *Reconciler) setPhase(ctx context.Context, task *agentsv1alpha1.AgentTas
 // ensurePod creates the agent pod if missing and returns the live pod. If the
 // pod has failed it is recreated until the restart budget is exhausted, in which
 // case ensurePod returns (nil, nil) to signal terminal failure.
-func (r *Reconciler) ensurePod(ctx context.Context, task *agentsv1alpha1.AgentTask) (*corev1.Pod, error) {
+func (r *Reconciler) ensurePod(ctx context.Context, task *agentsv1alpha1.AgentTask, bundle *ResolvedBundle) (*corev1.Pod, error) {
 	key := types.NamespacedName{Name: podName(task), Namespace: r.cfg.Namespace}
 
 	var existing corev1.Pod
@@ -169,9 +217,15 @@ func (r *Reconciler) ensurePod(ctx context.Context, task *agentsv1alpha1.AgentTa
 		return nil, fmt.Errorf("getting pod: %w", err)
 	}
 
-	pod := r.buildPod(task)
-	if err := controllerutil.SetControllerReference(task, pod, r.client.Scheme()); err != nil {
-		return nil, fmt.Errorf("setting pod owner ref: %w", err)
+	pod := r.buildPod(task, bundle)
+	// Pods are provisioned in the controller's configured namespace while the
+	// AgentTask may live in any namespace; Kubernetes forbids cross-namespace
+	// owner references, so namespace-mismatched tasks link via labels
+	// (labelTask) and the atCapacity/task-cleanup paths instead of GC.
+	if task.Namespace == r.cfg.Namespace {
+		if err := controllerutil.SetControllerReference(task, pod, r.client.Scheme()); err != nil {
+			return nil, fmt.Errorf("setting pod owner ref: %w", err)
+		}
 	}
 	if err := r.client.Create(ctx, pod); err != nil {
 		if apierrors.IsAlreadyExists(err) {
@@ -196,8 +250,11 @@ func (r *Reconciler) ensureService(ctx context.Context, task *agentsv1alpha1.Age
 	}
 
 	svc := r.buildService(task)
-	if err := controllerutil.SetControllerReference(task, svc, r.client.Scheme()); err != nil {
-		return fmt.Errorf("setting service owner ref: %w", err)
+	// Same cross-namespace rule as the pod owner reference above.
+	if task.Namespace == r.cfg.Namespace {
+		if err := controllerutil.SetControllerReference(task, svc, r.client.Scheme()); err != nil {
+			return fmt.Errorf("setting service owner ref: %w", err)
+		}
 	}
 	if err := r.client.Create(ctx, svc); err != nil {
 		return fmt.Errorf("creating service: %w", err)

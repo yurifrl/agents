@@ -21,8 +21,12 @@ type Config struct {
 	// Namespace is where agent pods/services are created.
 	Namespace string `mapstructure:"namespace"`
 
-	// AgentImage is the image that runs agent-entrypoint inside task pods.
+	// AgentImage is the image that runs the worker bridge inside task pods.
 	AgentImage string `mapstructure:"agent_image"`
+
+	// CloneImage is the image used by the repo pre-clone init container. Empty
+	// reuses AgentImage (it ships git).
+	CloneImage string `mapstructure:"clone_image"`
 
 	// SecretName is the Kubernetes Secret (the single "agents" item) mounted
 	// wholesale into every agent pod.
@@ -94,6 +98,7 @@ func Load(path string) (*Config, error) {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("namespace", "agents")
 	v.SetDefault("agent_image", "ghcr.io/yurifrl/agents:latest")
+	v.SetDefault("clone_image", "")
 	v.SetDefault("secret_name", "agents")
 	v.SetDefault("image_pull_secret", "")
 	v.SetDefault("max_concurrent", 0)
@@ -113,6 +118,7 @@ func bindEnv(v *viper.Viper) {
 	keys := []string{
 		"namespace",
 		"agent_image",
+		"clone_image",
 		"secret_name",
 		"image_pull_secret",
 		"max_concurrent",

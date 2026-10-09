@@ -7,5 +7,5 @@ spec:
   type: researcher
   owner: yuri
   prompt: "Summarize the README of this repo."
-  runtime: adk
+  runtime: pi
   lifecycle: ephemeral

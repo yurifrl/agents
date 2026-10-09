@@ -1,0 +1,18 @@
+apiVersion: agents.yurifrl.dev/v1alpha1
+kind: AgentTask
+metadata:
+  name: worker-repospec-clone
+  namespace: agents
+spec:
+  type: worker
+  owner: yuri
+  repoSpec:
+    url: https://github.com/yurifrl/agents.git
+    ref: main
+    clonePath: /workspace/repo
+  output: pr
+  runtime: pi
+  lifecycle: ephemeral
+  prompt: >-
+    Inspect the repository checked out at /workspace/repo and summarize the
+    top-level structure in one paragraph.

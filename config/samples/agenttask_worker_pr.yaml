@@ -8,7 +8,7 @@ spec:
   owner: yuri
   repo: yurifrl/agents
   output: pr
-  runtime: adk
+  runtime: pi
   lifecycle: ephemeral
   prompt: >-
     Create a file docs/HELLO_FROM_AGENT.md with a short markdown note:
