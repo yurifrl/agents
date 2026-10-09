@@ -37,6 +37,11 @@ tasks:
     cmds:
       - go run ./cmd/agents controller
 
+  run:remote-agents:
+    desc: Run the remote-agents server (Go, from source)
+    cmds:
+      - go run ./cmd/agents server
+
   check:
     desc: tidy + generate + build + vet
     cmds:
