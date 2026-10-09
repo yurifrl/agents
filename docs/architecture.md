@@ -1,92 +1,104 @@
 # Architecture
 
-`agents` is the control plane for **remote agents**: ephemeral, pod-isolated
-agents declared Kubernetes-style. An `AgentTask` is to a running agent what a
-`Pod` spec is to a container. This repo is the *system*; the cluster deployment
-(ArgoCD apps, ExternalSecrets) lives in `home-systems`.
+`agents` is the control plane for **remote agents**: one Go binary that runs
+omp coding agents as supervised workers — locally (herdr panes, child
+processes) or in Kubernetes (pods) — behind one HTTP+SSE API. The omp
+extension (`remote-agents/packages/extension`) is the only client.
+
+## D0 — omp is the only worker runtime
+
+Every surface — herdr pane, child process, k8s pod — runs `omp --mode rpc`
+behind the same line-JSON RPC driver. There is no other agent runtime; the
+former "adk" stack (`internal/agent`, `runner`, `a2a`, `output`,
+`workstrator`, `agentmd`-driven entrypoints, `pi/pi-remote-agents.ts`) was
+deleted in the unification. Commit/PR "output contracts" are prompt-level:
+omp commits and pushes with its mounted credentials.
 
 ## Components
 
 | Component | Path | Responsibility |
 |-----------|------|----------------|
-| `AgentTask` CRD | `api/v1alpha1/` | Declarative unit of agent work (spec: type, prompt, repo, owner, runtime, lifecycle, output; status: phase, podName, artifacts, restarts). |
-| Controller | `internal/controller/agenttask/` | Reconciles an ephemeral `AgentTask` into a Pod (+Service); owner refs, deadline, pod-phase → status. |
-| Agent entrypoint | `cmd/agents` (`agent-entrypoint`) | Runs *inside* the pod: one-shot from env, or `--serve` as an A2A server. |
-| Agent runtime | `internal/agent/` | Anthropic client (`Run`) + structured change planner (`Plan`). |
-| Invocation runner | `internal/runner/` | Orchestrates one invocation: model + output contract, emitting A2A events. |
-| A2A surface | `internal/a2a/` | Agent card, `/invoke`, SSE types + helpers; in-pod `Server`. |
-| Gateway | `internal/gateway/` (`agents gateway`) | Stateful front door: owner-scoped task store, AgentTask create, pod dispatch, SSE fan-out/replay, cancel/ack/list. |
-| pi extension | `pi/pi-remote-agents.ts` | `RemoteAgent*` tools + reconciliation; talks to the gateway. |
-| Output contracts | `internal/output/` | `response` (text), `commit` (push branch), `pr` (push + open PR) via go-git + GitHub API. |
-| Config | `internal/config/` | viper: every setting is both a file key and an `AGENTS_*` env var. |
-| Logging | `internal/logging/` | charmbracelet/log adapted to `logr`. |
-| Manager | `internal/kube/` | controller-runtime manager + scheme. |
+| Server | `internal/server/` (`agents server`) | HTTP+SSE API, durable store (`state.json` + `events/<id>.jsonl`), supervisor (spawn/steer/cancel/deadline/re-adoption), settle logic. Same API the bun server used to serve. |
+| RPC driver | `internal/rpc/` | omp line-JSON framing, `ready` handshake, request correlation, events, quiet-window settle. |
+| Surfaces | `internal/surface/` | `process` (child of server) · `herdr` (pane + TCP bridge, survives restarts) · `k8s` (pod + service, pod IP dial). |
+| Bridge | `internal/surface/bridge/` | Generated stdio↔TCP bridge script (herdr panes); replays the worker's `ready` frame to reconnecting clients. |
+| Worker entrypoint | `cmd/agents worker` | In-pod bridge: listens on TCP, keeps a live omp child across supervisor connections. Bridge semantics as a Go binary. |
+| AgentTask CRD | `api/v1alpha1/` | Declarative pod-backed task: profile/inline definition, skills, repoSpec pre-clone, runtime `pi`. |
+| Controller | `internal/controller/agenttask/` | Reconciles an ephemeral `AgentTask` into a Pod (+Service): mode validation, skill bundling, pre-clone init container, deadline, restart budget, pod-phase → status. |
+| Skill bundling | `internal/controller/agenttask/skills.go`, `internal/agentmd/` | Agent.md parsing, AgentSkill resolution, deterministic bundle composition + hash. |
+| Extension | `remote-agents/packages/extension/` | omp extension: `RemoteAgent` tools, widget, `/remote-agents`, session reconcile; spawns `agents server` on demand. |
+| Wire protocol | `remote-agents/packages/protocol/` | Source of truth for wire shapes (TS), mirrored by `internal/protocol/`. |
+| Config | `internal/config/` | viper: every setting is both a file key and an `AGENTS_*` env var (controller side). |
+| Manager | `internal/kube/` | controller-runtime manager + scheme + client. |
 
 ```
-cmd/agents/            cobra root: controller | agent-entrypoint | gateway
+cmd/agents/            cobra root: server | controller | worker
 api/v1alpha1/          CRD types (+kubebuilder markers)
 internal/
-  config/              viper (file AND env)
-  logging/             charm log -> logr
-  kube/                scheme + manager + client
-  controller/agenttask reconciler + pod/service builders
-  agent/               model client + change planner
-  runner/              invocation orchestration (response|commit|pr)
-  a2a/                 A2A surface (card, /invoke, SSE) + in-pod server
-  gateway/             stateful task store + dispatch + reconnection API
-  output/              response | commit | pr
-pi/                    pi-remote-agents.ts extension
+  protocol/            Go mirror of remote-agents/packages/protocol
+  rpc/                 omp RPC driver
+  server/              store + supervisor + HTTP/SSE
+  surface/             process | herdr | k8s (+ bridge script)
+  controller/agenttask k8s reconciler + pod/service builders + skills
+  agentmd/             Agent.md parsing (kept: skill bundling)
+  config/ logging/ kube/
+remote-agents/packages/
+  extension/           the omp extension (client)
+  protocol/            wire contract (TS source of truth)
+  rpc-driver/          omp RPC client (TS) + test fixtures
 config/{crd,rbac}/     generated by controller-gen
-config/samples/        example AgentTasks
+config/samples/        example AgentTasks (incl. repoSpec pre-clone)
 ```
 
-## Request flow (the glue)
+## Request flow
 
 ```
-pi (RemoteAgent tool) --POST /tasks/create--> gateway
-      ^                                          | creates AgentTask CRD
-      | SSE /tasks/{id}/stream                    v
-      |                                    controller --> Pod (--serve) + Service
-      +------------------ SSE fan-out <-- gateway --POST /invoke + SSE--> pod A2A server
+omp session (extension)
+   │  RemoteAgent tools · /remote-agents · reconcile (POST /attach)
+   ▼  HTTP + SSE  (127.0.0.1:8679)
+agents server ── Supervisor ── Surface
+   │                            ├─ process: omp child (piped stdio)
+   │                            ├─ herdr:   omp in a pane ↔ bridge.mjs ↔ TCP
+   │                            └─ k8s:     Pod (`agents worker`) ↔ Service ↔ pod IP
+   ▼  omp RPC JSONL
+worker: omp --mode rpc --session-dir …
 ```
+
+Kubernetes path: an `AgentTask` CRD is reconciled into a Pod running
+`agents worker` (omp RPC over TCP on :8080) plus a Service; `repoSpec`
+triggers a git-clone init container into a shared emptyDir. Skills mount as a
+composed bundle (`AGENT_BUNDLE_*` env, hash-annotated).
 
 ## Decisions (with rationale)
 
-These are load-bearing. Changing one is a deliberate architectural act, not an
-implementation detail — record it here when you do.
+Load-bearing. Changing one is a deliberate architectural act — record it here.
 
-- **D1 — Declarative-first, reproducible from source.** The litmus test for any
-  change: *could the cluster be deleted and rebuilt from git + 1Password alone?*
-  If a step only exists as a command someone ran, it does not exist. No
-  hand-applied state.
-- **D2 — Secrets via 1Password + External Secrets Operator.** A single 1Password
-  `agents` item → one `ExternalSecret` → one Kubernetes Secret mounted into agent
-  pods. Never `kubectl create secret`, never `--from-literal`.
-- **D3 — controller-runtime directly, no kubebuilder scaffold.** We hand-write
-  types with `+kubebuilder` markers and use `controller-gen` only for DeepCopy +
-  CRD/RBAC. Keeps the layout package-oriented and ours.
-- **D4 — No DI framework.** uber/fx was tried and removed; the idiomatic
-  controller-runtime `main` is clearer and has less magic.
-- **D5 — Pure-Go side effects for distroless.** `output: pr|commit` uses go-git
-  and the GitHub REST API — no `git`/`gh` binaries — so the image stays
-  `distroless/static`.
-- **D6 — Multi-arch image.** Workers are ARM64 (Turing Pi) and amd64; the build
-  publishes `linux/amd64,linux/arm64`.
-- **D7 — `output:` is a behavior contract, not metadata.** The entrypoint does
-  clone/branch/commit/push/open-PR based on `output:`; the model never has to
-  "remember" to open a PR.
-- **D8 — CI builds & pushes via the workflow `GITHUB_TOKEN`.** No personal access
-  tokens for image publishing.
-- **D9 — A2A surface implemented directly, not via `a2a-go`.** D10 of the change
-  design requires the gateway and pods to *speak A2A* (agent-card, an invoke
-  endpoint, SSE streaming, health) — it does not mandate the `a2a-go` library.
-  For this MVP we implement that conformant surface in `internal/a2a` with the
-  stdlib (net/http + SSE), avoiding a heavy dependency. Revisit if full A2A
-  spec conformance (push notifications, JSON-RPC envelope) becomes required.
+- **D0 — omp is the only worker runtime.** One RPC driver, one supervisor, one
+  result pipeline. The adk runtime and A2A surface were deleted, not wrapped.
+- **D1 — Declarative-first, reproducible from source.** *Could the cluster be
+  deleted and rebuilt from git + 1Password alone?* No hand-applied state.
+- **D2 — Secrets via 1Password + External Secrets Operator.** One `agents`
+  item → one `ExternalSecret` → one Secret mounted into worker pods.
+- **D3 — controller-runtime directly, no kubebuilder scaffold.** Hand-written
+  types with `+kubebuilder` markers; controller-gen only for DeepCopy +
+  CRD/RBAC.
+- **D4 — No DI framework.** The idiomatic controller-runtime `main` is clearer.
+- **D5 — Prompt-level output contracts.** `output: commit|pr` is achieved by
+  prompting omp to commit/push/open PRs with mounted credentials — omp does git
+  natively; the server never implements git side effects.
+- **D6 — Multi-arch image.** `linux/amd64,linux/arm64`.
+- **D7 — One wire protocol everywhere.** The extension talks the same HTTP/SSE
+  API to `agents server` (local surfaces) and to the controller; worker
+  transport is always the omp RPC line protocol, over stdio (process) or TCP
+  (herdr bridge, k8s worker).
+- **D8 — Re-adoption over reconnect.** herdr and k8s workers outlive the
+  server: worker meta records the bridge address (`host:port`), and a
+  restarted server re-dials, re-handshakes (ready replay), and finishes via
+  `get_state`/`get_last_assistant_text`. Process-surface workers die with the
+  server and are marked failed with a `--resume` hint instead.
 
 ## Boundaries
 
-- This repo owns the *system* (controller, entrypoint, runtime, contracts).
-- `home-systems` owns *deployment*: the `agents` ArgoCD app, the namespace, the
-  CRD install, and the `agents`/pull-secret ExternalSecrets. Deployment wiring
-  belongs there and must be declarative.
+- This repo owns the *system* (server, controller, worker, contracts).
+- `home-systems` owns *deployment*: ArgoCD apps, namespace, CRD install,
+  ExternalSecrets. Deployment wiring belongs there and must be declarative.

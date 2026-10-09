@@ -3,7 +3,7 @@
 What is actually built vs. pending. This is the truth about *current* state;
 keep it honest, including known corner-cuts that still need fixing.
 
-_Last reconciled: 2026-06-15._
+_Last reconciled: 2026-09-17._
 
 ## Built
 
@@ -81,6 +81,36 @@ _Last reconciled: 2026-06-15._
   `remote-agents/CONTRACT.md`. Notable finding: installed omp (pi 0.84.4) never
   emits `agent_settled` — the supervisor settles on `agent_end` + 3s quiet
   window (see CONTRACT §4).
+
+## Built: Go unification (2026-09-17)
+
+One Go binary (`agents`) now owns everything; the bun server universe is gone.
+
+- **`internal/protocol` + `internal/rpc`** — Go mirror of the TS wire contract;
+  omp RPC driver (handshake, correlation, events, quiet-window settle). Port of
+  `packages/rpc-driver`.
+- **`internal/server`** — HTTP+SSE API, durable store (`state.json` + event
+  logs), supervisor (create→…→terminal, steer/cancel/ack, deadline,
+  re-adoption), `agents server` subcommand. Replaces `packages/server`.
+- **`internal/surface`** — `process` (child), `herdr` (pane + TCP bridge via
+  the ported `bridge.mjs`), `k8s` (Pod + Service + pod-IP dial). Replaces
+  `packages/surfaces`.
+- **Extension cutover** — `ensureServer` spawns the Go binary
+  (`REMOTE_AGENTS_SERVER_BIN` → `agents` on PATH); `packages/server` and
+  `packages/surfaces` deleted; `pi/pi-remote-agents.ts` deleted.
+- **`agents worker`** — in-pod bridge entrypoint (omp RPC over TCP, ready
+  replay, survives supervisor restarts). Replaces `agent-entrypoint`/A2A.
+- **CRD** — `RepoSpec {url, ref, clonePath}` pre-clone init container (oneof
+  with plain `repo`); runtime enum → `pi` only (D0). Reconciler validates
+  profile/inline mode, composes skill bundles (`AGENT_BUNDLE_*`), fails
+  invalid specs without pods.
+- **K8s surface** — server-side `REMOTE_AGENTS_SURFACE=k8s`: worker pods +
+  service, re-adoption via pod IP.
+- **Verified**: `go test ./...` green (rpc/server/surface/controller/agentmd);
+  `bun test` 115/115 (extension/protocol/rpc-driver); worker bridge smoke
+  (handshake, request, events, reconnect); full HTTP lifecycle E2E vs
+  `agents server` (create → completed + result, SSE replay, ack, 409 steer
+  post-terminal, state persistence).
 
 ## Known corner-cuts to repay (debt log)
 
