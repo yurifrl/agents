@@ -1,0 +1,12 @@
+[submodule "submodules/omp"]
+	path = submodules/omp
+	url = https://github.com/can1357/oh-my-pi
+[submodule "submodules/meca-omp"]
+	path = submodules/meca-omp
+	url = git@github.com:nsxbet/meca-omp.git
+[submodule "submodules/ax-omp"]
+	path = submodules/ax-omp
+	url = git@github.com:yurifrl/ax-omp.git
+[submodule "submodules/tennon"]
+	path = submodules/tennon
+	url = git@github.com:yurifrl/tennon.git
