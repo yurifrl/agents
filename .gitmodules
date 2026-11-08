@@ -1,6 +1,6 @@
 [submodule "submodules/omp"]
 	path = submodules/omp
-	url = https://github.com/can1357/oh-my-pi
+	url = git@github.com:yurifrl/oh-my-pi.git
 [submodule "submodules/meca-omp"]
 	path = submodules/meca-omp
 	url = git@github.com:nsxbet/meca-omp.git
