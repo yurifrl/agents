@@ -320,10 +320,16 @@ spec:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
   volumeClaimTemplates:
-  - metadata:
+  # apiVersion/kind/volumeMode must be explicit: server-side apply sends
+  # unset fields as null and the apiserver rejects null in a claim template
+  # (client-side apply would default them silently).
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
       name: data
     spec:
       accessModes: [ "ReadWriteOnce" ]
+      volumeMode: Filesystem
       resources:
         requests:
           # Headroom so WAL churn cannot fill the volume: a full pg_wal is a
