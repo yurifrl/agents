@@ -1,0 +1,38 @@
+# 01 — hello task
+#
+# The smallest Task: one digest-pinned image, one command, debug enabled so
+# `ax ssh` reaches the sandbox. Applies → Suspended; run `ax resume task
+# ax-example-hello` to schedule it (see README.md).
+apiVersion: ax.io/v1alpha1
+kind: Task
+metadata:
+  name: ax-example-hello
+  atespace: default
+spec:
+  # Digest pin required. NOTE: docker.io images fail on this substrate
+  # (runsc start: exit status 128 at resume); ghcr.io images run. The
+  # platform's own image is the verified-working reference.
+  image: ghcr.io/yurifrl/omp-remote-agents@sha256:61b3a4f6c76215fb2e730bec9de2d2f981f5cc7d57a354339385b6c024e74892
+  command:
+    - /bin/sh
+    - -c
+    - |
+      set -u
+      {
+        echo "hello from a cluster worker"
+        echo "worker:  $(hostname)"
+        echo "greeting: ${DEMO_GREETING:-unset}"
+        echo
+        echo "workspace contents:"
+        ls -la /workspace
+      } > /workspace/report.txt
+  env:
+    - name: DEMO_GREETING
+      value: "hi from the manifest"
+  resources:
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  # debug serves guest services inside the sandbox so `ax ssh` works;
+  # off by default in production tasks.
+  debug: true

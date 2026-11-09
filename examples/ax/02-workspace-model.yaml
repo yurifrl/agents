@@ -1,0 +1,31 @@
+# 02 — platform objects: Workspace + Model
+#
+# Workspaces register git repos; Models declare the LLM provider. Both are
+# standalone objects you apply once and reuse (like the live `home-lab`
+# workspace and `gemini-flash` model).
+#
+# NOTE: this substrate predates task↔workspace binding — `spec.workspace.name`
+# on a Task is rejected ("unknown field"). Tasks reach repos via the image or
+# their own commands; the workspace objects remain for future substrate
+# versions and `ax get` visibility.
+---
+apiVersion: ax.io/v1alpha1
+kind: Workspace
+metadata:
+  name: ax-example-ws
+  atespace: default
+spec:
+  git:
+    - name: origin
+      repo: https://github.com/yurifrl/home-systems.git
+      branch: main
+      depth: 1
+---
+apiVersion: ax.io/v1alpha1
+kind: Model
+metadata:
+  name: ax-example-gemini
+  atespace: default
+spec:
+  provider: google
+  model: gemini-2.5-flash

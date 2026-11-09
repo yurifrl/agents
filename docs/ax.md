@@ -52,16 +52,19 @@ ax get model <name>
 ax version
 ```
 
-Task lifecycle:
+Task lifecycle — new tasks start **Suspended**; resume schedules the worker:
 
 ```bash
 ax apply -f task.yaml        # create from manifest (or -f - for stdin)
-ax resume <name>             # resume a suspended task
-ax ssh <name>                # shell into the task's worker
-ax delete <name>             # delete a task
+ax resume <name>             # resume a suspended task (also: resume task <name>)
+ax ssh <name>                # shell into the task's worker (debug: true required)
+ax delete task <name>        # delete — kind is required: task|workspace|model
 ```
 
 ## Example: define a task
+
+Minimal working set (hello / workspace+file / agent+model) lives in
+[`examples/ax/`](../examples/ax/README.md). Smallest Task:
 
 ```yaml
 apiVersion: ax.io/v1alpha1
@@ -70,7 +73,9 @@ metadata:
   name: demo
   atespace: default          # atespace scope (ax -a flag default: "default")
 spec:
-  image: ghcr.io/yurifrl/omp-remote-agents:latest
+  # Digest pin required: tag-only images fail at resume
+  # (TemplateCreationFailed) — pin like `crane digest <image>` gives.
+  image: alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
   command:
     - /bin/sh
     - -c
@@ -80,10 +85,10 @@ spec:
 ```
 
 ```bash
-ax apply -f task.yaml
-ax get task demo
-ax ssh demo
-ax delete demo
+ax apply -f task.yaml        # → Suspended (actor reserved, nothing runs)
+ax resume demo               # → Running; spec.command execs on the worker
+…
+ax delete task demo
 ```
 
 Workspaces are separate objects (`ax get workspaces`) that register git repos;

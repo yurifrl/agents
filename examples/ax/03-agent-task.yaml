@@ -1,0 +1,73 @@
+# 03 — agent task: omp headlessly against Gemini
+#
+# Model (provider config) + a Task whose command is a real agent run. On this
+# substrate the ExternalSecret contract (charts/ax → gemini-api-secret /
+# GEMINI_API_KEY) injects the provider key into EVERY task's env, so no secret
+# wiring here. The Workspace object below is standalone: this ax-server
+# predates task↔workspace binding (`spec.workspace.name` is rejected —
+# verified), so the task stages its own state under /workspace.
+#
+# Results land in /workspace/omp-result.txt for retrieval with `ax ssh -- cat`.
+apiVersion: ax.io/v1alpha1
+kind: Model
+metadata:
+  name: ax-example-gemini
+  atespace: default
+spec:
+  provider: google
+  model: gemini-2.5-flash
+  # Fixed substrate contract: gemini-api-secret/GEMINI_API_KEY is provisioned
+  # by the chart's ExternalSecret in the atespace namespace; ax-server also
+  # injects it into every ActorTemplate env, so agent images need no wiring.
+  secretKey:
+    name: gemini-api-secret
+    key: GEMINI_API_KEY
+---
+apiVersion: ax.io/v1alpha1
+kind: Workspace
+metadata:
+  name: ax-example-agent-ws
+  atespace: default
+spec:
+  git:
+    - name: home-systems
+      repo: https://github.com/yurifrl/home-systems.git
+      branch: main
+      depth: 1
+---
+apiVersion: ax.io/v1alpha1
+kind: Task
+metadata:
+  name: ax-example-agent
+  atespace: default
+spec:
+  # The omp remote-agents image (built from pi-extentions/omp-remote-agents);
+  # digest copied from a live task on this substrate — re-resolve after
+  # rebuilding: `crane digest ghcr.io/yurifrl/omp-remote-agents:latest`.
+  image: ghcr.io/yurifrl/omp-remote-agents@sha256:61b3a4f6c76215fb2e730bec9de2d2f981f5cc7d57a354339385b6c024e74892
+  command:
+    - /bin/sh
+    - -c
+    - |
+      set -u
+      export HOME=/workspace/.home
+      mkdir -p "$HOME"
+      cd /workspace
+      # GEMINI_API_KEY is already in the env (substrate-injected).
+      # `--model provider/model` = omp built-in provider registry; custom
+      # gateway models need a gateway endpoint and fail without one.
+      /usr/local/bin/omp -p "$TASK_GOAL" \
+        --model google/gemini-2.5-flash \
+        > /workspace/omp-result.txt 2> /workspace/omp-stderr.txt
+      echo "exit=$?" >> /workspace/omp-result.txt
+  env:
+    - name: TASK_GOAL
+      value: >-
+        Write a one-paragraph description of this sandbox: who you are, what
+        files exist under /workspace, and what tools you can run. Save it to
+        /workspace/summary.md.
+  resources:
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  debug: true
