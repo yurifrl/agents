@@ -18,7 +18,7 @@ images:
   # ${AX_SERVER_IMAGE}). Pin the digest the workflow prints once it ran.
   server:
     repository: ghcr.io/yurifrl/ax/ax-server
-    tag: "v0.4.0-rc.1@sha256:61563add6971bc22c0de905f8fd5a30513aa3f727f84ba70ce44b5e94ad8e361"
+    tag: "v0.4.0-rc.1@sha256:6c877c6469603e277c38dc8a41ba5b46c714e51a47f8c895a238cb996974dd57"
   # -- Default task image (AX_DEFAULT_TASK_IMAGE) for Tasks whose
   # spec.profile names no image: upstream Dockerfile.task-runner (python slim
   # + git/curl/ssh + /usr/local/bin/ax-task-runner), built by the same

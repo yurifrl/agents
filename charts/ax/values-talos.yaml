@@ -1,7 +1,10 @@
 # home talos-default profile. ax images are built from google/ax v0.4.0-rc.1
 # and published to public ghcr.io/yurifrl/ax/* by the build-images workflow;
-# postgres is the official upstream image. No pull secret. Everything stays on
-# amd64 via the chart's default nodeSelector.
+# postgres is the official upstream image. No pull secret.
+
+# ax-server is built multi-arch and postgres is multi-arch upstream, so ax pods
+# may run on any node; dell01 (the only amd64 worker) is kept for the substrate.
+nodeSelector: {}
 
 images:
   server:
