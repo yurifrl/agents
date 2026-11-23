@@ -1,47 +1,42 @@
 # Default values for ax.
-# Deploys google/ax: ax-server (direct task executor) and Redis, into the
-# Helm release namespace.
-# ax-server requires a running agent-substrate (api.ate-system.svc) and its
-# podcert cluster trust bundles; deploy agent-substrate first (sync-wave 0).
+# Deploys google/ax v0.4.0-rc.1: ax-server (task executor + Gateway API +
+# internal runner endpoint) and its PostgreSQL store, into the Helm release
+# namespace. ax-server requires a running agent-substrate v1.0.x
+# (api.ate-system.svc, idp.ate-system.svc, atenet-router/egress) and its
+# podcert cluster trust bundles; deploy agent-substrate first.
 
 ax:
-  # -- The ax build version. Stamps the server image tag and appVersion
-  # expectations. The mirror-ate-images workflow (ko build) pushes exactly
-  # this tag; it must exist or pods stay ImagePullBackOff.
-  version: "92d297e"
+  # -- The ax build version (google/ax git ref the images were built from).
+  version: "v0.4.0-rc.1"
 
 replicas:
   server: 1
 
-# -- Redis for ax-server's streams controller. By default the chart deploys
-# its own ax-redis Deployment in the release namespace (requirepass off,
-# emptyDir).
-# Set local.enabled=false and address to reuse an existing instance -- the
-# home talos cluster points ax-server at the shared cluster redis
-# (redis.redis.svc.cluster.local:6379, db 0 of the shared index registry).
-redis:
-  local:
-    enabled: true
-  # -- Connection string handed to ax-server's --redis-addr. Ignored when
-  # local.enabled=true, which pins the bundled instance's in-cluster DNS
-  # name instead.
-  address: ""
-
 images:
-  # -- ko-built image, published to public ghcr by the build-images workflow
-  # (there are no upstream ax images; upstream manifests reference
-  # ko://github.com/google/ax/cmd/ax-server).
+  # -- ko-built ax-server, published to public ghcr by the build-images
+  # workflow (upstream publishes no ax images; deploy/ax-server.yaml takes
+  # ${AX_SERVER_IMAGE}). Pin the digest the workflow prints once it ran.
   server:
     repository: ghcr.io/yurifrl/ax/ax-server
-    # Built from upstream main HEAD 7b3347f5 (substrate-coupled integration
-    # lands on main between releases: v0.3.1 predates -substrate-endpoint and
-    # the substrate v0.5.0 bump). Digest-pinned: snapshots depend on immutable
-    # images.
-    tag: "7b3347f5a8af37676f711e750f354014a1705e24@sha256:0eeb5c568497ec45a93126f5fdf6506b815338eb52fadbc3a7a7fb50fad63aae"
-  # -- Official upstream redis, not ko-built.
-  redis:
-    repository: docker.io/library/redis
-    tag: "7-alpine"
+    tag: "v0.4.0-rc.1@sha256:61563add6971bc22c0de905f8fd5a30513aa3f727f84ba70ce44b5e94ad8e361"
+  # -- Default task image (AX_DEFAULT_TASK_IMAGE) for Tasks whose
+  # spec.profile names no image: upstream Dockerfile.task-runner (python slim
+  # + git/curl/ssh + /usr/local/bin/ax-task-runner), built by the same
+  # workflow. Empty repository falls back to ax's compiled-in default
+  # (gcr.io/ax-substrate/ate-images/ax-task-runner).
+  taskRunner:
+    repository: ghcr.io/yurifrl/ax/ax-task-runner
+    tag: "v0.4.0-rc.1@sha256:062909bcca0784b0a3af0b02cbac7b4478b0ac67bc0f4577c14544c8abfbbc38"
+  # -- Optional digest-pinned runner volume image (AX_RUNNER_VOLUME_IMAGE,
+  # Dockerfile.runner-volume) mounted read-only into task containers. Empty
+  # runs the runner baked into each task image.
+  runnerVolume: ""
+  # -- ax-postgres image (upstream deploy/postgres.yaml uses
+  # postgres:17-alpine), digest-pinned.
+  postgres:
+    repository: docker.io/library/postgres
+    tag: "17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73"
+
 substrate:
   # -- Control-plane endpoint ax-server connects to (gRPC over TLS).
   endpoint: api.ate-system.svc.cluster.local:443
@@ -49,8 +44,25 @@ substrate:
   # token audience for ax-server's substrate connection.
   authority: api.ate-system.svc
   # -- Path of the cluster trust bundle mounted for verifying the substrate
-  # control plane. Served by agent-substrate's podcert servicedns signer.
+  # control plane (and the ate-idp-server issuer). Served by
+  # agent-substrate's podcert servicedns signer.
   caFile: /run/servicedns-ca/trust-bundle.pem
+  # -- atenet-router mTLS ingress ax-server reaches task actors through
+  # (ATENET_ROUTER_ADDR). ax-server presents its podidentity certificate;
+  # agent-substrate's atenetRouter.ingressAllowedSpiffeIds must list
+  # spiffe://cluster.local/ns/<release-namespace>/sa/ax-server.
+  atenetRouterAddr: https://atenet-router.ate-system.svc.cluster.local:443
+  # -- OIDC issuer of the Actor JWTs the egress gateway injects on runner
+  # calls to :8081 (AX_ACTOR_JWT_ISSUER); must equal agent-substrate's
+  # ateapi.actorJwtIssuer.
+  actorJwtIssuer: https://idp.ate-system.svc
+
+runner:
+  # -- In-cluster host:port of ax-server's :8081 runner service, written into
+  # every task actor's EgressPolicy (AX_RUNNER_ENDPOINT). Empty uses ax's
+  # default, ax-server-runner.ax-system.svc.cluster.local:8081 — set it when
+  # the release namespace is not ax-system.
+  endpoint: ""
 
 template:
   # -- ActorTemplate ax-server fetches from substrate for each task.
@@ -61,25 +73,48 @@ template:
   # Kubernetes namespace matching this atespace.
   atespace: default
 
-snapshots:
-  # -- REQUIRED. Bucket ax-server records task snapshots into, forwarded to
-  # substrate ActorTemplates. On EKS use s3:// (substrate's ategcs parses
-  # any scheme and ATE_STORAGE_BACKEND=s3 serves it); a trailing slash keeps
-  # name concatenation unambiguous. Render fails when unset because the
-  # upstream default (a Google dev gs:// bucket) is meaningless off-GKE.
-  bucket: ""
+postgres:
+  # -- PVC size for ax-postgres (upstream: 10Gi).
+  storage: 10Gi
+  # -- StorageClass for the PVC; empty uses the cluster default.
+  storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  password:
+    # -- Generate the ax-postgres password Secret (key: password) once with
+    # the External Secrets Operator Password generator (refreshInterval 0:
+    # never rotated, since postgres only reads it at initdb). Set false and
+    # create Secret ax-postgres yourself where ESO is absent.
+    generate: true
 
-env:
-  # -- atenet-router ingress for task sockets.
-  atenetRouterAddr: atenet-router.ate-system.svc.cluster.local:80
+networkPolicy:
+  # -- Render upstream's NetworkPolicies: ax-server :8080/:9090 closed to
+  # worker pods and atenet-egress, :8081 open only to atenet-egress;
+  # ax-postgres open only to ax-server.
+  enabled: true
+  # -- Extra TCP ports admitted from any non-worker pod on ax-server.
+  # Istio ambient delivers meshed traffic (e.g. the ingress gateway) on the
+  # HBONE port 15008, which a port-scoped NetworkPolicy would otherwise drop.
+  extraIngressPorts: []
+
+otel:
+  # -- ax-otel-config ConfigMap (envFrom). Upstream default: no OTLP export,
+  # metrics on /metrics (:9090), events on stdout.
+  env:
+    OTEL_TRACES_EXPORTER: none
+    OTEL_METRICS_EXPORTER: prometheus
 
 # -- Model-provider API key, provisioned via External Secrets Operator from
-# 1Password. ax-server resolves the K8s Secret `gemini-api-secret` (fixed
-# ax contract, not configurable upstream) / key `GEMINI_API_KEY` in the
-# task atespace's Kubernetes namespace — NOT the release namespace — and
-# injects it into every ActorTemplate it creates for a task. The 1Password
-# item must contain a field named GEMINI_API_KEY; by repo convention the
-# item name equals the ExternalSecret name (see obs/, hermes/).
+# 1Password. ax resolves the K8s Secret `gemini-api-secret` (fixed
+# ax contract, internal/model DefaultSecretName) / key `GEMINI_API_KEY` in the
+# task atespace's Kubernetes namespace — NOT the release namespace. The
+# 1Password item must contain a field named GEMINI_API_KEY; by repo
+# convention the item name equals the ExternalSecret name (see obs/, hermes/).
 externalSecret:
   enabled: true
   # -- ExternalSecret name.
@@ -101,8 +136,7 @@ externalSecret:
   # -- ESO refresh interval for the upstream item.
   refreshInterval: 1h
   target:
-    # -- K8s Secret name ax-server reads. Fixed by ax's secret contract
-    # (internal/controller/reconciler.go geminiSecretName); change only
+    # -- K8s Secret name ax reads. Fixed by ax's secret contract; change only
     # together with an ax version that renames it.
     name: gemini-api-secret
     creationPolicy: Owner
@@ -119,7 +153,7 @@ registry:
 # [{name: ax-registry}]).
 imagePullSecrets: []
 
-# -- Pod nodeSelector for all ax workloads. Images are linux/amd64-only (ko
-# single-arch builds); when this key is ABSENT the helper defaults every pod
-# to kubernetes.io/arch: amd64. Set it to {} to opt out on single-arch
-# (e.g. arm64) clusters.
+# -- Pod nodeSelector for all ax workloads. ax-server/ax-task-runner are
+# linux/amd64-only builds (the workflow passes --platform=linux/amd64); when
+# this key is ABSENT the helper defaults every pod to kubernetes.io/arch:
+# amd64. Set it to {} to opt out.

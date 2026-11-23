@@ -1,6 +1,8 @@
 # Default values for agent-substrate.
-# This chart deploys the ate-system substrate: ate-api-server, ate-controller,
-# atelet (DaemonSet), atenet-router and agentgateway on an EKS cluster.
+# This chart deploys the ate-system substrate (upstream v1.0.1): ate-api-server,
+# ate-idp-server, ate-controller, atelet (DaemonSet), atenet-router/egress on
+# agentgateway, podcertificate-controller and the optional Kubernetes Secrets
+# credential provider.
 # It replaces `ate-setup deploy ate-system` (kustomize + ko) with ArgoCD-managed Helm.
 
 # -- No substrate.version value: the official install does not version-stamp
@@ -10,51 +12,59 @@
 
 images:
   ateapi:
-    # -- Official component layout mirrors upstream's `ate-setup publish
-    # release-images`: one repo per component under org, one tag per release.
-    # ghcr.io/yurifrl/ate/* is built from the unmodified upstream source
-    # at tag v0.5.0 by the build-images workflow (upstream publishes no images
-    # of its own; ate-setup expects the operator's registry).
-    repository: ghcr.io/yurifrl/ate/ateapi
-    tag: "v0.5.0"
+    # -- Upstream release images (ghcr.io/agent-substrate/substrate/<name>),
+    # published multi-arch (linux/amd64 + linux/arm64) by the v1.0.1 release
+    # workflow and digest-pinned to the index. Since v1.0 upstream publishes
+    # its own images, so nothing in this chart is self-built any more.
+    repository: ghcr.io/agent-substrate/substrate/ateapi
+    tag: "v1.0.1@sha256:5d9f6da2e1446766a48908764891cc3c66cc6ff657279415c0d3839d5e9476ee"
   atecontroller:
-    repository: ghcr.io/yurifrl/ate/atecontroller
-    tag: "v0.5.0"
+    repository: ghcr.io/agent-substrate/substrate/atecontroller
+    tag: "v1.0.1@sha256:b63519a821f4c702a689caf5b1ff549a8d6134ac3da94def30c71f914a70d614"
   atelet:
-    repository: ghcr.io/yurifrl/ate/atelet
-    tag: "v0.5.0"
+    repository: ghcr.io/agent-substrate/substrate/atelet
+    tag: "v1.0.1@sha256:f6707957b470d8a8529e65a4ec3eb1ad5182a607b313b6b1628c7fe6c0e5a9e6"
+  idpServer:
+    # -- ate-idp-server (new in v1.0): serves the actor-JWT OIDC discovery
+    # document and JWKS at https://idp.ate-system.svc from the same
+    # actor-id-jwt-pool ate-api-server signs with.
+    repository: ghcr.io/agent-substrate/substrate/ate-idp-server
+    tag: "v1.0.1@sha256:5d9302255998a3f376cbea8d8860488d20b6c030417c0c3ea7fba53a67f2c9f7"
   podcert:
-    # -- podcertificate-controller (publishes the podidentity/servicedns
-    # ClusterTrustBundles the atelet/ate-controller projected volumes use).
-    repository: ghcr.io/yurifrl/ate/podcertcontroller
-    tag: "v0.5.0"
+    # -- podcertificate-controller (publishes the podidentity/servicedns/postgres
+    # ClusterTrustBundles the projected volumes use).
+    repository: ghcr.io/agent-substrate/substrate/podcertcontroller
+    tag: "v1.0.1@sha256:46aa01a624053c23080da41ea37937afc5b544cecf77088ab2196b4ffb734b4f"
   objectStorePlugin:
-    # -- v0.5.0 control object-store plugin sidecar served next to ate-api-server.
-    repository: ghcr.io/yurifrl/ate/objectstore-plugin
-    tag: "v0.5.0"
-  ateomGvisor:
-    # -- ateom worker image (workerpool-gvisor.yaml): the sandboxed worker
-    # runtime actors boot on. ko build of substrate/cmd/ateom-gvisor; without
-    # a WorkerPool the substrate scheduler has no placement capacity and
-    # every actor create fails with "no worker has room for the actor".
-    repository: ghcr.io/yurifrl/ate/ateom-gvisor
-    tag: "v0.5.0"
-  # -- atenet-router runs the agentgateway image (see values.images.agentgateway);
-  # there is no separate atenet server image in the cluster manifests.
+    # -- object-store plugin: control sidecar next to ate-api-server, node
+    # sidecar next to atelet.
+    repository: ghcr.io/agent-substrate/substrate/objectstore-plugin
+    tag: "v1.0.1@sha256:311cc9cfb9ee8c344f3ebc3e4d5cafb88468840023b62d1c47c6338ed32b0352"
+  ateworkerGvisor:
+    # -- Worker image the gvisor WorkerPool runs (workerpool-gvisor.yaml).
+    # v1.0 renamed cmd/ateom-gvisor to cmd/ateworker-gvisor.
+    repository: ghcr.io/agent-substrate/substrate/ateworker-gvisor
+    tag: "v1.0.1@sha256:fd0c6a46d6c69d485856171e632906e774594bea9d00011a4d7038be3e084a2a"
+  credentialProvider:
+    # -- Bundled Kubernetes Secrets credential provider
+    # (credentialProvider.enabled): resolves ate-secret://k8s.io/... URIs in
+    # EgressPolicy header effects for the egress gateway.
+    repository: ghcr.io/agent-substrate/substrate/kubernetes-secrets
+    tag: "v1.0.1@sha256:46a2872c624c6e3af98984f1097d2205f012ea6c471516ac5189ceb3adef96e5"
+  # -- atenet-router runs the agentgateway image; there is no separate atenet
+  # server image in the agentgateway dataplane.
   agentgateway:
-    # -- Official upstream agentgateway image. Bumped from v0.5.0's
-    # alpha.168b05d6 pin: that build predates agentgateway PR #3990 (default
-    # egress policy lookup) and fails against ateapi v0.5.0 with
-    # "name: Required value" on every egress fetch.
-    # (atenet-router and atenet-egress both run it).
+    # -- Official agentgateway image, digest-pinned exactly as substrate
+    # v1.0.1's components/agentgateway overlay pins it (atenet-router and
+    # atenet-egress both run it).
     repository: cr.agentgateway.dev/agentgateway
-    tag: "v1.7.0-alpha.1@sha256:2a8ab6e70cc18c74cbe4cacdb435fe24f1b413e0f95bb2b6972961a46c4d63a1"
-  # -- atenet-egress runs the same digest-pinned agentgateway image as the
-  # v0.5.0 agentgateway component overlay; its internal dynamicCa bind mints
-  # MITM leaves signed by the egress-mitm-ca-pool secret.
+    tag: "v1.7.0@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b"
+  # -- atenet-egress runs the same digest-pinned agentgateway image; its
+  # internal dynamicCa bind mints MITM leaves signed by the
+  # egress-mitm-ca-pool secret.
   agentgatewayEgress:
     repository: cr.agentgateway.dev/agentgateway
-    tag: "v1.7.0-alpha.1@sha256:2a8ab6e70cc18c74cbe4cacdb435fe24f1b413e0f95bb2b6972961a46c4d63a1"
+    tag: "v1.7.0@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b"
   postgres:
     # -- Bundled PostgreSQL (see postgres.bundled): official upstream image,
     # digest-pinned (multi-arch: amd64 + arm64).
@@ -64,12 +74,12 @@ images:
     # -- S3-compatible object store for local clusters
     # (storage.rustfs.enabled): official upstream image, digest-pinned.
     repository: docker.io/rustfs/rustfs
-    tag: "1.0.0-beta.3@sha256:378642b05b7dcb4849fb77ebe6aca4ced1c3f66e7e504247df95a5c9018d3358"
+    tag: "1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b"
   awscli:
     # -- Bucket-bootstrap Job image (rustfs.yaml): official upstream image,
     # digest-pinned.
     repository: docker.io/amazon/aws-cli
-    tag: "2.17.0@sha256:643507c10ada7964ca6157b3d799f030b90577643da9955d319a77399ed80d73"
+    tag: "2.38.5@sha256:c8156a0e74e13929a42d7e60f0d4e14e7d28d980cd21822505d4bff80e5460c1"
   otelcollector:
     # -- In-cluster OTLP collector (otel.collector.enabled): official upstream
     # image, digest-pinned (kind/otel-collector.yaml).
@@ -95,11 +105,64 @@ ateapi:
   # issuer hostname only resolves from outside the cluster (e.g. a LAN DNS
   # name like api.k8s.lan that cluster CoreDNS upstreams don't serve).
   hostAliases: []
-  # -- iss claim of minted actor JWTs (ATE_API_ACTOR_JWT_ISSUER). The
-  # default is the in-cluster ate-idp-server URL; that server is not part of
-  # this chart, so MintActorJWT still works (api-server signs from its local
-  # pool) but relying parties cannot yet resolve the issuer.
+  # -- iss claim of minted actor JWTs (ATE_API_ACTOR_JWT_ISSUER), also
+  # passed to ate-idp-server as --issuer. The default is the in-cluster
+  # ate-idp-server Service (templates/ate-idp-server.yaml), which relying
+  # parties such as ax-server's runner endpoint use for OIDC discovery.
   actorJwtIssuer: https://idp.ate-system.svc
+  # -- ate-api-server replica count.
+  replicas: 2
+  # -- apiconfig.textproto logging level (ate-api-config ConfigMap; ate-setup
+  # `create api-config`).
+  logLevel: info
+  authz:
+    # -- Principals that are always global owners (--authz-bootstrap-owners,
+    # required since v1.0: ate-api-server exits without at least one).
+    # Upstream's default is the shared ate-client ServiceAccount. Clients that
+    # create atespaces/templates/actors (e.g. ax-server) must be listed or be
+    # granted an AccessPolicy by an owner.
+    bootstrapOwners:
+      - system:serviceaccount:ate-system:ate-client
+  # -- Cluster-wide default snapshot location (ATE_API_SNAPSHOT_LOCATION ->
+  # --snapshot-location). REQUIRED since v1.0 unless the
+  # PerTemplateSnapshotLocation preview gate is on; render fails when empty.
+  # On s3/rustfs use s3://<bucket>/[prefix]; snapshots land under
+  # <location>/atespaces/.
+  snapshotLocation: ""
+  # -- GCS-only: the transfer service account the control object-store
+  # plugin's credential exchange impersonates. Leave empty on s3 (the S3
+  # exchange is unimplemented and never called).
+  transferServiceAccount: ""
+
+# ate-idp-server (new in v1.0): actor-JWT OIDC issuer.
+idpServer:
+  # -- Deploy ate-idp-server + Service idp. ax-server verifies runner Actor
+  # JWTs against it, so keep it on whenever ax runs.
+  enabled: true
+  # -- Replica count (upstream: 2).
+  replicas: 2
+
+# atenet-router (agentgateway dataplane, static-mTLS ingress).
+atenetRouter:
+  # -- SPIFFE IDs allowed through the router's mTLS ingress (agentgateway
+  # networkAuthorization rule; replaces ate-setup's
+  # [ATE_INGRESS_ALLOWED_SPIFFE_IDS] marker). Empty denies every client on
+  # the https/connect-tls gateways. ax-server is
+  # spiffe://cluster.local/ns/<ax-namespace>/sa/ax-server.
+  ingressAllowedSpiffeIds: []
+
+# Bundled Kubernetes Secrets credential provider
+# (manifests/egress-credential-injection, ate-setup --credential-provider
+# '{"name":"k8s.io"}'). Lets EgressPolicy header effects reference
+# ate-secret://k8s.io/<atespace>/<namespace>/<secret>/<key>; the egress gateway fetches
+# the value over mTLS.
+credentialProvider:
+  # -- Deploy k8s-credential-provider and point atenet-egress at it.
+  enabled: false
+  # -- namespace-policy.yaml policies (default-deny when empty): which
+  # Kubernetes namespaces each atespace may read Secrets from, optionally
+  # narrowed by a label selector.
+  namespacePolicies: []
 
 # -- ghcr.io/yurifrl/ate/* is public: no pull Secret, no imagePullSecrets.
 # registry.* only builds one when a private registry needs it.
@@ -205,23 +268,42 @@ crds:
 # Cluster-wide SandboxConfigs + the fail-closed asset validation policy.
 sandbox:
   gvisor:
-    # -- Apply the cluster-wide gvisor SandboxConfig (name: gvisor-default).
+    # -- Apply the cluster-wide gvisor SandboxConfig (name: gvisor-default,
+    # cluster-scoped since v1.0).
     enabled: true
-    pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
-    assets:
-      amd64:
-        gvisor:
-          url: "gs://gvisor/releases/nightly/2026-10-10/x86_64/gvisor.tar.zstd"
-          sha256: "4ae7fab988c3647d2a835d6c3c70c6a99021c562db97827592562b6c51c3e88c"
-      arm64:
-        gvisor:
-          url: "gs://gvisor/releases/nightly/2026-10-10/aarch64/gvisor.tar.zstd"
-          sha256: "aaf414f06eea7960238e43165c691f0a36cefc0593fb141e011e96211c7b6f57"
+    # -- Version actors boot when their template names none.
+    defaultVersion: v7
+    # -- Named runtime versions, verbatim from substrate v1.0.1
+    # manifests/ate-install/sandboxconfig-gvisor.yaml (gVisor releases
+    # 20261026.0 and 20261102.0). v1.0 dropped pauseImage; the validating
+    # admission policy requires a 'gvisor' tarball asset per architecture.
+    versions:
+      - name: v6
+        state: Enabled
+        assets:
+          amd64:
+            gvisor:
+              url: "gs://gvisor/releases/release/20261026.0/x86_64/gvisor.tar.zstd"
+              sha256: "708afc62f2ee82d19930c703e85f9dab4f27a78c0aec40c0f55eb1040107f1a7"
+          arm64:
+            gvisor:
+              url: "gs://gvisor/releases/release/20261026.0/aarch64/gvisor.tar.zstd"
+              sha256: "6257e49955f13e6caceb2c4181c5dc5406c460e805940c944e67ad65553f5b02"
+      - name: v7
+        state: Enabled
+        assets:
+          amd64:
+            gvisor:
+              url: "gs://gvisor/releases/release/20261102.0/x86_64/gvisor.tar.zstd"
+              sha256: "a1439ffbba7d212e0fde32ea79fa9bb51cbc4c5f6c16af1f047260290b861d42"
+          arm64:
+            gvisor:
+              url: "gs://gvisor/releases/release/20261102.0/aarch64/gvisor.tar.zstd"
+              sha256: "f702ae92ad7a0c4134be34ca23f52966dbb696db0c0f5b8ec439210ab2cd7c6a"
   microvm:
     # -- Apply the microvm (cloud-hypervisor/kata) SandboxConfig. Opt-in:
     # requires the kata asset set staged in the cluster bucket first.
     enabled: false
-    pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
     bucket: "ate-cluster-bucket" # -- cluster object-store bucket holding kata-assets/
     assets:
       arm64:
@@ -269,8 +351,8 @@ workers:
 validatingAdmissionPolicy:
   enabled: true
 
-# -- Pod nodeSelector for every workload. Images are linux/amd64-only (ko
-# single-arch builds), so when this key is ABSENT the helper defaults every
-# pod to kubernetes.io/arch: amd64. Set it to {} to opt out entirely on
+# -- Pod nodeSelector for every workload. When this key is ABSENT the helper
+# defaults every pod to kubernetes.io/arch: amd64 (the v1.0 images are
+# multi-arch; the pin keeps the control plane next to the amd64 data plane). Set it to {} to opt out entirely on
 # single-arch (e.g. arm64) clusters. NOTE: YAML merge means {} here overrides
 # cleanly only because the key is not defined in this file.

@@ -1,34 +1,14 @@
-# home talos-default profile (k8s 1.32, Longhorn storage, mixed amd64/arm64).
+# home talos-default profile (k8s 1.37, Longhorn storage, mixed amd64/arm64).
 # Mirrors the kind profile shape: rustfs object store with static creds
 # (no cloud IAM), in-chart OTLP collector + jaeger (the repo's `monitoring`
 # namespace stack is Prometheus, no OTLP receiver), small PostgreSQL sizing.
-# Image distribution: ko components from ghcr.io/yurifrl/ate/<name>
-# (public, built from upstream release tag v0.5.0 by the build-images
-# workflow); infra images are official upstream references. No pull secret
-# needed.
-
-# v0.5.0: podcertcontroller writes ClusterTrustBundles via
-# certificates.k8s.io/v1 (the older v1beta1 form writes 404 on k8s 1.37).
+# Image distribution: substrate components are the upstream v1.0.1 release
+# images (ghcr.io/agent-substrate/substrate/*, multi-arch, digest-pinned in
+# values.yaml); infra images are official upstream references. No pull secret
+# needed. Workloads stay on amd64 via the chart's default nodeSelector (dell01
+# is the only ate.dev/substrate node).
 
 images:
-  ateapi:
-    repository: ghcr.io/yurifrl/ate/ateapi
-    tag: "v0.5.0"
-  atecontroller:
-    repository: ghcr.io/yurifrl/ate/atecontroller
-    tag: "v0.5.0"
-  atelet:
-    repository: ghcr.io/yurifrl/ate/atelet
-    tag: "v0.5.0"
-  podcert:
-    repository: ghcr.io/yurifrl/ate/podcertcontroller
-    tag: "v0.5.0"
-  objectStorePlugin:
-    repository: ghcr.io/yurifrl/ate/objectstore-plugin
-    tag: "v0.5.0"
-  agentgateway:
-    repository: cr.agentgateway.dev/agentgateway
-    tag: "v1.7.0-alpha.1@sha256:2a8ab6e70cc18c74cbe4cacdb435fe24f1b413e0f95bb2b6972961a46c4d63a1"
   postgres:
     repository: docker.io/library/postgres
   rustfs:
@@ -40,8 +20,8 @@ images:
   jaeger:
     repository: docker.io/jaegertracing/all-in-one
 
-# All images are public (official upstream + the public ghcr mirror): no pull
-# Secret, no imagePullSecrets.
+# All images are public (official upstream): no pull Secret, no
+# imagePullSecrets.
 imagePullSecrets: []
 
 postgres:
@@ -78,7 +58,7 @@ ateapi:
   authentication:
     # kube-apiserver mints SA tokens with this issuer here (talos advertises
     # its LB endpoint, not the in-cluster default the chart assumes); ax's
-    # controller is the only client authenticating with SA JWTs.
+    # server is the only client authenticating with SA JWTs.
     issuer: https://api.k8s.lan:6443
     # The issuer is kube-apiserver itself, reachable only via the LAN DNS name
     # (no cluster-internal resolution), so discovery uses the pod's own
@@ -89,13 +69,40 @@ ateapi:
   hostAliases:
   - ip: 192.168.68.91
     hostnames: [api.k8s.lan]
+  authz:
+    # ax-server creates atespaces, templates and actors with its own SA token
+    # (google/ax installs it the same way: axdeploy GrantSubstrateAccess /
+    # RenderSystemBundle append it to --authz-bootstrap-owners).
+    bootstrapOwners:
+      - system:serviceaccount:ate-system:ate-client
+      - system:serviceaccount:ax-system:ax-server
+  # rustfs bucket the bucket-init Job creates (templates/rustfs.yaml).
+  snapshotLocation: s3://ate-snapshots/
+
+# dell01 is tight on memory: one idp replica is enough for a single-node
+# substrate (ax's local installer also runs one).
+idpServer:
+  replicas: 1
+
+atenetRouter:
+  # ax-server reaches task actors through the router's mTLS ingress
+  # (ATENET_ROUTER_ADDR=https://atenet-router.ate-system.svc.cluster.local:443
+  # with its podidentity client cert).
+  ingressAllowedSpiffeIds:
+    - spiffe://cluster.local/ns/ax-system/sa/ax-server
+
+credentialProvider:
+  # ax Gateway rules can inject credentials from Secrets labeled
+  # ax.io/credential=true (google/ax installer's default policy).
+  enabled: true
+  namespacePolicies:
+    - atespace: default
+      allowedNamespaces: [ax-system, default]
+      secretSelector:
+        matchLabels:
+          ax.io/credential: "true"
 
 atelet:
   # Actor images pull from public ghcr.io anonymously — no GCP auth, no
   # localhost registry replacement (talos has no sidecar registry).
   extraArgs: []
-  # v0.5.0: snapshot/object-store handling lives in the node
-  # objectstore-plugin sidecar; both containers share the /var/lib/ate
-  # hostPath and atecontroller hardcodes that path for worker pod volumes
-  # (nodepath.BasePath).
-  objectStorePlugin: true

@@ -1,10 +1,12 @@
+{{- $snapshotLocation := required "ateapi.snapshotLocation must be set (v1.0 ate-api-server refuses to start without --snapshot-location, e.g. s3://ate-snapshots/)" .Values.ateapi.snapshotLocation -}}
+{{- $owners := required "ateapi.authz.bootstrapOwners must list at least one principal" .Values.ateapi.authz.bootstrapOwners -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ate-api-server
   namespace: ate-system
 spec:
-  replicas: 2
+  replicas: {{ .Values.ateapi.replicas }}
   selector:
     matchLabels:
       app: ate-api-server
@@ -17,6 +19,9 @@ spec:
       annotations:
         prometheus.io/port: "9090"
         prometheus.io/scrape: "true"
+        # Rolls the pods when the env/config ConfigMaps or Secret change
+        # (ate-setup stamps an equivalent env-hash annotation).
+        ate.dev/env-hash: {{ toJson (list .Values.ateapi .Values.postgres) | sha256sum | trunc 16 | quote }}
       labels:
         app: ate-api-server
     spec:
@@ -25,22 +30,27 @@ spec:
       {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
-      # v0.5.0: the control object-store plugin deletes and copies external
-      # snapshots for ate-api-server over a Unix socket in a pod-local
-      # emptyDir. A native sidecar starts before ate-api-server and stops
-      # after it; ate-api-server starts only once the startup probe sees the
-      # plugin serving (the image has no shell, so the binary checks itself).
+      # The control object-store plugin deletes and copies external snapshots
+      # for ate-api-server over a Unix socket in a pod-local emptyDir, and
+      # serves the credential exchange on :8445 (GCS only; S3 answers
+      # UNIMPLEMENTED and the S3 node plugin never calls it). A native sidecar
+      # starts before ate-api-server and stops after it; ate-api-server starts
+      # only once the startup probe sees the plugin serving (the image has no
+      # shell, so the binary checks itself).
       - name: objectstore-plugin
         image: {{ .Values.images.objectStorePlugin.repository }}:{{ .Values.images.objectStorePlugin.tag }}
         restartPolicy: Always
         args:
         - control
         - --socket=/run/objectstore-plugin/control.sock
-        {{- if .Values.storage.rustfs.enabled }}
-        # Local-cluster object store (see rustfs.yaml): static creds instead of IRSA.
+        - --exchange-listen=:8445
+        - --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
+        - --transfer-service-account=$(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT)
         env:
         - name: ATE_STORAGE_BACKEND
           value: {{ .Values.storage.backend }}
+        {{- if .Values.storage.rustfs.enabled }}
+        # Local-cluster object store (see rustfs.yaml): static creds instead of IRSA.
         - name: AWS_ACCESS_KEY_ID
           value: {{ .Values.storage.rustfs.accessKey | quote }}
         - name: AWS_SECRET_ACCESS_KEY
@@ -52,8 +62,26 @@ spec:
         - name: AWS_S3_USE_PATH_STYLE
           value: "true"
         {{- end }}
-        # The plugin listens on a Unix socket, which a gRPC probe cannot
-        # reach, and the image has no shell, so the binary checks itself.
+        - name: ATE_API_ACTOR_JWT_ISSUER
+          valueFrom:
+            configMapKeyRef:
+              key: ATE_API_ACTOR_JWT_ISSUER
+              name: ate-api-server-envvars
+        - name: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+          valueFrom:
+            configMapKeyRef:
+              key: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+              name: ate-api-server-envvars
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        envFrom:
+        - configMapRef:
+            name: ate-otel-config
+        ports:
+        - containerPort: 8445
+          name: exchange
         startupProbe:
           exec:
             command:
@@ -63,23 +91,32 @@ spec:
           periodSeconds: 2
           failureThreshold: 30
         securityContext:
+          allowPrivilegeEscalation: false
           capabilities:
             drop:
             - ALL
+          runAsNonRoot: true
         volumeMounts:
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
+        - name: servicedns
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
       containers:
       - args:
         - --grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem
+        - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
         - --authentication-config=/etc/ateapi/authentication/authentication.yaml
         - --postgres-read-write-connection-string=@env
         - --postgres-owner-connection-string=@env
         - --postgres-read-write-role=@env
         - --postgres-owner-role=@env
         - --postgres-schema=@env
-        - --actor-jwt-issuer=@env
         - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
+        - --actor-jwt-issuer=@env
         - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
         - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
         - --pod-identity-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
@@ -88,6 +125,10 @@ spec:
         - --drain-delay=13s
         - --drain-timeout=15s
         - --objectstore-plugin-socket=/run/objectstore-plugin/control.sock
+        - --snapshot-location=@env
+        # Global owners independent of the stored AccessPolicy (ate-setup's
+        # --ateapi-authz-bootstrap-owners). Required since v1.0.
+        - --authz-bootstrap-owners={{ join "," $owners }}
         env:
         - name: POD_NAME
           valueFrom:
@@ -133,6 +174,14 @@ spec:
             port: health
           initialDelaySeconds: 5
           periodSeconds: 2
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            add:
+            - NET_BIND_SERVICE
+            drop:
+            - ALL
+          runAsNonRoot: true
         startupProbe:
           failureThreshold: 24
           httpGet:
@@ -140,12 +189,14 @@ spec:
             port: health
           periodSeconds: 5
         volumeMounts:
+        - mountPath: /run/objectstore-plugin
+          name: objectstore-plugin
         - mountPath: /run/servicedns.podcert.ate.dev
           name: servicedns
         - mountPath: /run/podidentity.podcert.ate.dev
           name: podidentity
-        # v0.5.0: separate owner and read/write login certificates; each
-        # login is its certificate's CN, matching the bundled server's hba.
+        # Separate owner and read/write login certificates; each login is its
+        # certificate's CN, matching the bundled server's hba.
         - mountPath: /run/postgres.podcert.ate.dev
           name: postgres
           readOnly: true
@@ -154,8 +205,9 @@ spec:
         - mountPath: /run/actor-id-ca-pool
           name: actor-id-ca-pool
           readOnly: true
-        - mountPath: /run/objectstore-plugin
-          name: objectstore-plugin
+        - mountPath: /run/apiconfig.ate.dev
+          name: api-config
+          readOnly: true
         - mountPath: /etc/ateapi/authentication
           name: authentication-config
           readOnly: true
@@ -171,21 +223,6 @@ spec:
       # ate-api-server dials (objectstore-plugin-socket).
       - name: objectstore-plugin
         emptyDir: {}
-      - name: postgres
-        projected:
-          sources:
-          - podCertificate:
-              credentialBundlePath: substrate_owner_user.pem
-              keyType: ECDSAP256
-              signerName: postgres.podcert.ate.dev/identity
-              userAnnotations:
-                postgres.podcert.ate.dev/username: substrate_owner_user
-          - podCertificate:
-              credentialBundlePath: substrate_readwrite_user.pem
-              keyType: ECDSAP256
-              signerName: postgres.podcert.ate.dev/identity
-              userAnnotations:
-                postgres.podcert.ate.dev/username: substrate_readwrite_user
       - name: servicedns
         projected:
           sources:
@@ -212,6 +249,21 @@ spec:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
               signerName: podidentity.podcert.ate.dev/identity
+      - name: postgres
+        projected:
+          sources:
+          - podCertificate:
+              credentialBundlePath: substrate_owner_user.pem
+              keyType: ECDSAP256
+              signerName: postgres.podcert.ate.dev/identity
+              userAnnotations:
+                postgres.podcert.ate.dev/username: substrate_owner_user
+          - podCertificate:
+              credentialBundlePath: substrate_readwrite_user.pem
+              keyType: ECDSAP256
+              signerName: postgres.podcert.ate.dev/identity
+              userAnnotations:
+                postgres.podcert.ate.dev/username: substrate_readwrite_user
       - name: actor-id-jwt-pool
         projected:
           sources:
@@ -228,6 +280,9 @@ spec:
               - key: pool
                 path: pool.json
               name: actor-id-ca-pool
+      - configMap:
+          name: ate-api-config
+        name: api-config
       - configMap:
           name: ate-api-authentication
         name: authentication-config

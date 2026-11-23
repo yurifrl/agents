@@ -1,12 +1,13 @@
 apiVersion: v2
 name: agent-substrate
 description: >
-  Deploys the agent-substrate (ate-system) platform on EKS: ate-api-server,
-  ate-controller, atelet DaemonSet, atenet-router, agentgateway, CRDs,
+  Deploys Agent Substrate v1.0.1 (ate-system): ate-api-server, ate-idp-server,
+  ate-controller, atelet DaemonSet, atenet-router/egress on agentgateway,
+  podcertificate-controller, the Kubernetes Secrets credential provider, CRDs,
   SandboxConfigs and RBAC. Replaces `ate-setup deploy ate-system`.
 type: application
-version: 0.2.0
-appVersion: "v0.5.0"
+version: 0.3.0
+appVersion: "v1.0.1"
 home: https://github.com/agent-substrate/substrate
 sources:
   - https://github.com/nsxbet/helm-charts/tree/main/charts/agent-substrate

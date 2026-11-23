@@ -11,6 +11,12 @@ spec:
     port: 443
     protocol: TCP
     targetPort: 443
+  # Control object-store plugin's credential exchange (atelet's node plugin
+  # dials it on GCS).
+  - name: exchange
+    port: 8445
+    protocol: TCP
+    targetPort: 8445
   selector:
     app: ate-api-server
 
@@ -39,19 +45,14 @@ metadata:
   namespace: ate-system
 spec:
   ipFamilyPolicy: PreferDualStack
+  # v1.0.1 static-mTLS agentgateway serves only https (443->8443) and
+  # connect-tls (8444); the http/connect Service ports upstream still lists
+  # have no listener behind them, so they are not rendered.
   ports:
-  - name: http
-    port: 80
-    protocol: TCP
-    targetPort: 8080
   - name: https
     port: 443
     protocol: TCP
     targetPort: 8443
-  - name: connect
-    port: 8081
-    protocol: TCP
-    targetPort: 8081
   - name: connect-tls
     port: 8444
     protocol: TCP

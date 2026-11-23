@@ -1,3 +1,21 @@
+# ax-server, ported from google/ax v0.4.0-rc.1 deploy/ax-server.yaml (the
+# manifest `ax install` / `make deploy` renders). It stores Tasks, Workspaces
+# and Gateways in PostgreSQL (ax-postgres.yaml), drives Agent Substrate with
+# its ServiceAccount token, reaches task actors through atenet-router's mTLS
+# ingress, and serves the runner endpoint (:8081) that task runners call
+# through atenet-egress with an injected Actor JWT.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ax-otel-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: {{ include "ax.partOf" . }}
+data:
+  {{- range $k, $v := .Values.otel.env }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,12 +34,10 @@ spec:
       labels:
         app.kubernetes.io/name: ax-server
         app.kubernetes.io/part-of: {{ include "ax.partOf" . }}
+      annotations:
+        # envFrom does not restart pods on ConfigMap edits.
+        checksum/otel: {{ toJson .Values.otel.env | sha256sum | trunc 16 | quote }}
     spec:
-      # ax-server executes tasks directly (the Redis-streams controller was
-      # removed upstream): it talks to Substrate to create ActorTemplates and
-      # actors, so it carries the same substrate identity as the old
-      # ax-controller — SA audience token for the ate API, servicedns CA, and
-      # the snapshot bucket for golden snapshots.
       serviceAccountName: ax-server
       nodeSelector:
         {{- include "ax.nodeSelector" . | nindent 8 }}
@@ -35,25 +51,61 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - "--addr=:8080"
-            {{- if .Values.redis.local.enabled }}
-            - "--redis-addr=ax-redis.{{ .Release.Namespace }}.svc.cluster.local:6379"
-            {{- else }}
-            - "--redis-addr={{ required "redis.address must be set when redis.local.enabled=false" .Values.redis.address }}"
-            {{- end }}
+            - "--runner-addr=:8081"
+            - "--metrics-addr=:9090"
+            # libpq fills the password from PGPASSWORD (Secret ax-postgres).
+            - "--store=postgres://ax@ax-postgres.{{ .Release.Namespace }}.svc.cluster.local:5432/ax?sslmode=disable"
             - "--substrate-endpoint={{ .Values.substrate.endpoint }}"
             - "--substrate-authority={{ .Values.substrate.authority }}"
             - "--substrate-token-file=/var/run/secrets/ateapi/token"
             - "--substrate-ca-file={{ .Values.substrate.caFile }}"
             - "--template={{ .Values.template.name }}"
             - "--template-atespace={{ .Values.template.atespace }}"
+            - "--actor-jwt-issuer={{ .Values.substrate.actorJwtIssuer }}"
+            {{- with .Values.runner.endpoint }}
+            - "--runner-endpoint={{ . }}"
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: ax-otel-config
           env:
+            # The resource attributes come from the downward API. Kubernetes
+            # expands $(VAR) only for a variable listed earlier.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)"
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ax-postgres
+                  key: password
             - name: ATENET_ROUTER_ADDR
-              value: {{ .Values.env.atenetRouterAddr | quote }}
-            - name: AX_SNAPSHOTS_BUCKET
-              value: {{ required "snapshots.bucket must be set (s3://bucket/prefix/ on EKS)" .Values.snapshots.bucket | quote }}
+              value: {{ .Values.substrate.atenetRouterAddr | quote }}
+            {{- if .Values.images.taskRunner.repository }}
+            - name: AX_DEFAULT_TASK_IMAGE
+              value: "{{ .Values.images.taskRunner.repository }}:{{ .Values.images.taskRunner.tag }}"
+            {{- end }}
+            # Empty runs the runner baked into each task image.
+            - name: AX_RUNNER_VOLUME_IMAGE
+              value: {{ .Values.images.runnerVolume | quote }}
           ports:
             - containerPort: 8080
               name: http
+            - containerPort: 8081
+              name: runner
+            - containerPort: 9090
+              name: metrics
           resources:
             requests:
               cpu: 100m
@@ -80,6 +132,12 @@ spec:
             - mountPath: /run/servicedns-ca
               name: servicedns-ca
               readOnly: true
+            # Client certificate for atenet-router's mTLS ingress; its SPIFFE
+            # ID (spiffe://cluster.local/ns/<ns>/sa/ax-server) must be in the
+            # router's allowlist.
+            - mountPath: /run/podidentity.podcert.ate.dev
+              name: podidentity
+              readOnly: true
       volumes:
         - name: ate-token
           projected:
@@ -99,6 +157,14 @@ spec:
                       podcert.ate.dev/canarying: live
                   path: trust-bundle.pem
                   signerName: servicedns.podcert.ate.dev/identity
+        - name: podidentity
+          projected:
+            defaultMode: 420
+            sources:
+              - podCertificate:
+                  credentialBundlePath: credential-bundle.pem
+                  keyType: ECDSAP256
+                  signerName: podidentity.podcert.ate.dev/identity
 ---
 apiVersion: v1
 kind: Service
@@ -112,6 +178,75 @@ spec:
   ports:
     - port: 8080
       targetPort: 8080
-      name: grpc
+      name: http
+    - port: 9090
+      targetPort: 9090
+      name: metrics
   selector:
     app.kubernetes.io/name: ax-server
+---
+# The internal runner endpoint, kept on its own Service so the
+# NetworkPolicy can expose it to atenet-egress alone. Task actors' egress
+# policies allow exactly this host:port (runner.endpoint).
+apiVersion: v1
+kind: Service
+metadata:
+  name: ax-server-runner
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: ax-server-runner
+    app.kubernetes.io/part-of: {{ include "ax.partOf" . }}
+spec:
+  ports:
+    - port: 8081
+      targetPort: 8081
+      name: runner
+  selector:
+    app.kubernetes.io/name: ax-server
+{{- if .Values.networkPolicy.enabled }}
+---
+# ax-server's HTTP/gRPC API (:8080) and metrics (:9090) do not authenticate
+# callers, so worker pods and the egress gateway must not reach them. The
+# runner endpoint (:8081) is reachable only from Substrate's egress gateway
+# (atenet-egress), which injects the Actor JWT ax-server verifies.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ax-server
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ax-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+        {{- range .Values.networkPolicy.extraIngressPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+      from:
+        - namespaceSelector: {}
+          podSelector:
+            matchExpressions:
+              - key: ate.dev/worker-pool
+                operator: DoesNotExist
+              - key: app
+                operator: NotIn
+                values: ["atenet-egress"]
+    - ports:
+        - protocol: TCP
+          port: 8081
+      from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ate-system
+          podSelector:
+            matchLabels:
+              app: atenet-egress
+{{- end }}

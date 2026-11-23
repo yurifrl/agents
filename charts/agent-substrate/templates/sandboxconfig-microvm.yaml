@@ -3,11 +3,10 @@
 # sandbox class. Requires the kata asset set staged under kata-assets/ in the
 # cluster object-store bucket BEFORE enabling: atelet fetches the binaries at
 # runtime and every microvm ActorTemplate names this config explicitly.
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: SandboxConfig
 metadata:
   name: microvm
-  namespace: ate-system
 spec:
   sandboxClass: microvm
   # Named versions group the runtime pieces into named versions; pauseImage is not

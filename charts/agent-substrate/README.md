@@ -1,8 +1,8 @@
 # agent-substrate
 
-![Version: 0.2.0](https://img.shields.io/badge/Version-0.2.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.5.0](https://img.shields.io/badge/AppVersion-v0.5.0-informational?style=flat-square)
+![Version: 0.3.0](https://img.shields.io/badge/Version-0.3.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v1.0.1](https://img.shields.io/badge/AppVersion-v1.0.1-informational?style=flat-square)
 
-Deploys the agent-substrate (ate-system) platform on EKS: ate-api-server, ate-controller, atelet DaemonSet, atenet-router, agentgateway, CRDs, SandboxConfigs and RBAC. Replaces `ate-setup deploy ate-system`.
+Deploys Agent Substrate v1.0.1 (ate-system): ate-api-server, ate-idp-server, ate-controller, atelet DaemonSet, atenet-router/egress on agentgateway, podcertificate-controller, the Kubernetes Secrets credential provider, CRDs, SandboxConfigs and RBAC. Replaces `ate-setup deploy ate-system`.
 
 **Homepage:** <https://github.com/agent-substrate/substrate>
 
@@ -20,40 +20,53 @@ Deploys the agent-substrate (ate-system) platform on EKS: ate-api-server, ate-co
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| ateapi.actorJwtIssuer | string | `"https://idp.ate-system.svc"` | iss claim of minted actor JWTs (ATE_API_ACTOR_JWT_ISSUER). Upstream's default is the in-cluster ate-idp-server URL; that server is not part of this chart, so MintActorJWT still works (api-server signs from its local pool) but relying parties cannot yet resolve the issuer. |
+| ateapi.actorJwtIssuer | string | `"https://idp.ate-system.svc"` | iss claim of minted actor JWTs (ATE_API_ACTOR_JWT_ISSUER), also passed to ate-idp-server as --issuer. The default is the in-cluster ate-idp-server Service (templates/ate-idp-server.yaml), which relying parties such as ax-server's runner endpoint use for OIDC discovery. |
 | ateapi.authentication.inClusterDiscovery | bool | `false` | Inject the pod's own projected service-account CA+token into the OIDC discovery client even for a non-default issuer, when that issuer is kube-apiserver itself but not publicly resolvable (talos, self-hosted). |
 | ateapi.authentication.issuer | string | `"https://kubernetes.default.svc"` | JWT issuer the api-server trusts for Kubernetes service-account tokens (ate-api-authentication ConfigMap). In-cluster default; on GKE set https://container.googleapis.com/v1/projects/<p>/locations/<l>/clusters/<c>. |
+| ateapi.authz.bootstrapOwners | list | `["system:serviceaccount:ate-system:ate-client"]` | Principals that are always global owners (--authz-bootstrap-owners, required since v1.0: ate-api-server exits without at least one). Upstream's default is the shared ate-client ServiceAccount. Clients that create atespaces/templates/actors (e.g. ax-server) must be listed or be granted an AccessPolicy by an owner. |
 | ateapi.hostAliases | list | `[]` | hostAliases entries for the ate-api-server pod, needed when the trusted issuer hostname only resolves from outside the cluster (e.g. a LAN DNS name like api.k8s.lan that cluster CoreDNS upstreams don't serve). |
+| ateapi.logLevel | string | `"info"` | apiconfig.textproto logging level (ate-api-config ConfigMap; ate-setup `create api-config`). |
+| ateapi.replicas | int | `2` | ate-api-server replica count. |
+| ateapi.snapshotLocation | string | `""` | snapshot-location). REQUIRED since v1.0 unless the PerTemplateSnapshotLocation preview gate is on; render fails when empty. On s3/rustfs use s3://<bucket>/[prefix]; snapshots land under <location>/atespaces/. |
+| ateapi.transferServiceAccount | string | `""` | GCS-only: the transfer service account the control object-store plugin's credential exchange impersonates. Leave empty on s3 (the S3 exchange is unimplemented and never called). |
 | atelet.extraArgs | list | `[]` | localhost-registry-replacement=kind-registry:5000. |
 | atelet.gcpAuthForImagePulls | bool | `false` | Pass GCP credentials for pulling actor images from GCR/Artifact Registry. MUST be false here: the workload/actor images are public ghcr, and atelet's in-process go-containerregistry pulls are anonymous for non-GCP registries. |
+| atenetRouter.ingressAllowedSpiffeIds | list | `[]` | SPIFFE IDs allowed through the router's mTLS ingress (agentgateway networkAuthorization rule; replaces ate-setup's [ATE_INGRESS_ALLOWED_SPIFFE_IDS] marker). Empty denies every client on the https/connect-tls gateways. ax-server is spiffe://cluster.local/ns/<ax-namespace>/sa/ax-server. |
 | crds.install | bool | `true` |  |
+| credentialProvider.enabled | bool | `false` | Deploy k8s-credential-provider and point atenet-egress at it. |
+| credentialProvider.namespacePolicies | list | `[]` | namespace-policy.yaml policies (default-deny when empty): which Kubernetes namespaces each atespace may read Secrets from, optionally narrowed by a label selector. |
+| idpServer.enabled | bool | `true` | Deploy ate-idp-server + Service idp. ax-server verifies runner Actor JWTs against it, so keep it on whenever ax runs. |
+| idpServer.replicas | int | `2` | Replica count (upstream: 2). |
 | imagePullSecrets | list | `[]` | ghcr.io/yurifrl/ate/* is public: no pull Secret, no imagePullSecrets. registry.* only builds one when a private registry needs it. |
-| images.agentgateway | object | `{"repository":"cr.agentgateway.dev/agentgateway","tag":"v0.0.0-alpha.168b05d6@sha256:5e8384d1fcfdc443a3ad5155ea6a64dc7953bde162df7f5f8e131a5c19ae08a3"}` | atenet-router runs the agentgateway image (see values.images.agentgateway); there is no separate atenet server image in the cluster manifests. |
-| images.agentgateway.repository | string | `"cr.agentgateway.dev/agentgateway"` | Official upstream agentgateway image, digest-pinned exactly as substrate v0.5.0's ate-install agentgateway component overlay pins it (atenet-router and atenet-egress both run it). |
-| images.agentgatewayEgress | object | `{"repository":"cr.agentgateway.dev/agentgateway","tag":"v0.0.0-alpha.168b05d6@sha256:5e8384d1fcfdc443a3ad5155ea6a64dc7953bde162df7f5f8e131a5c19ae08a3"}` | atenet-egress runs the same digest-pinned agentgateway image as the v0.5.0 agentgateway component overlay; its internal dynamicCa bind mints MITM leaves signed by the egress-mitm-ca-pool secret. |
-| images.ateapi.repository | string | `"ghcr.io/yurifrl/ate/ateapi"` | Official component layout mirrors upstream's `ate-setup publish release-images`: one repo per component under org, one tag per release. ghcr.io/yurifrl/ate/* is built from the unmodified upstream source at tag v0.5.0 by the build-images workflow (upstream publishes no images of its own; ate-setup expects the operator's registry). |
-| images.ateapi.tag | string | `"v0.5.0"` |  |
-| images.atecontroller.repository | string | `"ghcr.io/yurifrl/ate/atecontroller"` |  |
-| images.atecontroller.tag | string | `"v0.5.0"` |  |
-| images.atelet.repository | string | `"ghcr.io/yurifrl/ate/atelet"` |  |
-| images.atelet.tag | string | `"v0.5.0"` |  |
-| images.ateomGvisor.repository | string | `"ghcr.io/yurifrl/ate/ateom-gvisor"` | ateom worker image (workerpool-gvisor.yaml): the sandboxed worker runtime actors boot on. ko build of substrate/cmd/ateom-gvisor; without a WorkerPool the substrate scheduler has no placement capacity and every actor create fails with "no worker has room for the actor". |
-| images.ateomGvisor.tag | string | `"v0.5.0"` |  |
+| images.agentgateway | object | `{"repository":"cr.agentgateway.dev/agentgateway","tag":"v1.7.0@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b"}` | atenet-router runs the agentgateway image; there is no separate atenet server image in the agentgateway dataplane. |
+| images.agentgateway.repository | string | `"cr.agentgateway.dev/agentgateway"` | Official agentgateway image, digest-pinned exactly as substrate v1.0.1's components/agentgateway overlay pins it (atenet-router and atenet-egress both run it). |
+| images.agentgatewayEgress | object | `{"repository":"cr.agentgateway.dev/agentgateway","tag":"v1.7.0@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b"}` | atenet-egress runs the same digest-pinned agentgateway image; its internal dynamicCa bind mints MITM leaves signed by the egress-mitm-ca-pool secret. |
+| images.ateapi.repository | string | `"ghcr.io/agent-substrate/substrate/ateapi"` | Upstream release images (ghcr.io/agent-substrate/substrate/<name>), published multi-arch (linux/amd64 + linux/arm64) by the v1.0.1 release workflow and digest-pinned to the index. Since v1.0 upstream publishes its own images, so nothing in this chart is self-built any more. |
+| images.ateapi.tag | string | `"v1.0.1@sha256:5d9f6da2e1446766a48908764891cc3c66cc6ff657279415c0d3839d5e9476ee"` |  |
+| images.atecontroller.repository | string | `"ghcr.io/agent-substrate/substrate/atecontroller"` |  |
+| images.atecontroller.tag | string | `"v1.0.1@sha256:b63519a821f4c702a689caf5b1ff549a8d6134ac3da94def30c71f914a70d614"` |  |
+| images.atelet.repository | string | `"ghcr.io/agent-substrate/substrate/atelet"` |  |
+| images.atelet.tag | string | `"v1.0.1@sha256:f6707957b470d8a8529e65a4ec3eb1ad5182a607b313b6b1628c7fe6c0e5a9e6"` |  |
+| images.ateworkerGvisor.repository | string | `"ghcr.io/agent-substrate/substrate/ateworker-gvisor"` | Worker image the gvisor WorkerPool runs (workerpool-gvisor.yaml). v1.0 renamed cmd/ateom-gvisor to cmd/ateworker-gvisor. |
+| images.ateworkerGvisor.tag | string | `"v1.0.1@sha256:fd0c6a46d6c69d485856171e632906e774594bea9d00011a4d7038be3e084a2a"` |  |
 | images.awscli.repository | string | `"docker.io/amazon/aws-cli"` | Bucket-bootstrap Job image (rustfs.yaml): official upstream image, digest-pinned. |
-| images.awscli.tag | string | `"2.17.0@sha256:643507c10ada7964ca6157b3d799f030b90577643da9955d319a77399ed80d73"` |  |
+| images.awscli.tag | string | `"2.38.5@sha256:c8156a0e74e13929a42d7e60f0d4e14e7d28d980cd21822505d4bff80e5460c1"` |  |
+| images.credentialProvider.repository | string | `"ghcr.io/agent-substrate/substrate/kubernetes-secrets"` | Bundled Kubernetes Secrets credential provider (credentialProvider.enabled): resolves ate-secret://k8s.io/... URIs in EgressPolicy header effects for the egress gateway. |
+| images.credentialProvider.tag | string | `"v1.0.1@sha256:46a2872c624c6e3af98984f1097d2205f012ea6c471516ac5189ceb3adef96e5"` |  |
+| images.idpServer.repository | string | `"ghcr.io/agent-substrate/substrate/ate-idp-server"` | ate-idp-server (new in v1.0): serves the actor-JWT OIDC discovery document and JWKS at https://idp.ate-system.svc from the same actor-id-jwt-pool ate-api-server signs with. |
+| images.idpServer.tag | string | `"v1.0.1@sha256:5d9302255998a3f376cbea8d8860488d20b6c030417c0c3ea7fba53a67f2c9f7"` |  |
 | images.jaeger.repository | string | `"docker.io/jaegertracing/all-in-one"` | Jaeger all-in-one trace store + UI (otel.collector.enabled): official upstream image, digest-pinned. |
 | images.jaeger.tag | string | `"1.55@sha256:f6b5d09073f14f76873d300f565a6691d815e81bea8e07e1dc3ff67e0596dd4e"` |  |
-| images.objectStorePlugin.repository | string | `"ghcr.io/yurifrl/ate/objectstore-plugin"` | v0.5.0 control object-store plugin sidecar served next to ate-api-server. |
-| images.objectStorePlugin.tag | string | `"v0.5.0"` |  |
+| images.objectStorePlugin.repository | string | `"ghcr.io/agent-substrate/substrate/objectstore-plugin"` | object-store plugin: control sidecar next to ate-api-server, node sidecar next to atelet. |
+| images.objectStorePlugin.tag | string | `"v1.0.1@sha256:311cc9cfb9ee8c344f3ebc3e4d5cafb88468840023b62d1c47c6338ed32b0352"` |  |
 | images.otelcollector.repository | string | `"docker.io/otel/opentelemetry-collector-contrib"` | In-cluster OTLP collector (otel.collector.enabled): official upstream image, digest-pinned (kind/otel-collector.yaml). |
 | images.otelcollector.tag | string | `"0.157.0@sha256:f2f01157055a9b2aab9df7118e1f1c9abf345e99b23bc7a2bc791db374a7d0f6"` |  |
-| images.podcert.repository | string | `"ghcr.io/yurifrl/ate/podcertcontroller"` | podcertificate-controller (publishes the podidentity/servicedns ClusterTrustBundles the atelet/ate-controller projected volumes use). |
-| images.podcert.tag | string | `"v0.5.0"` |  |
+| images.podcert.repository | string | `"ghcr.io/agent-substrate/substrate/podcertcontroller"` | podcertificate-controller (publishes the podidentity/servicedns/postgres ClusterTrustBundles the projected volumes use). |
+| images.podcert.tag | string | `"v1.0.1@sha256:46aa01a624053c23080da41ea37937afc5b544cecf77088ab2196b4ffb734b4f"` |  |
 | images.postgres.repository | string | `"docker.io/library/postgres"` | Bundled PostgreSQL (see postgres.bundled): official upstream image, digest-pinned (multi-arch: amd64 + arm64). |
 | images.postgres.tag | string | `"18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"` |  |
 | images.rustfs.repository | string | `"docker.io/rustfs/rustfs"` | S3-compatible object store for local clusters (storage.rustfs.enabled): official upstream image, digest-pinned. |
-| images.rustfs.tag | string | `"1.0.0-beta.3@sha256:378642b05b7dcb4849fb77ebe6aca4ced1c3f66e7e504247df95a5c9018d3358"` |  |
-| nodeSelector | object | `{"kubernetes.io/arch":"amd64"}` | Pod nodeSelector for every workload. Images are linux/amd64-only (ko single-arch builds); mixed-arch clusters need arch pinning. Override with {} on single-arch clusters. |
+| images.rustfs.tag | string | `"1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b"` |  |
 | otel.collector | object | `{"enabled":false}` | Deploy the in-cluster collector + jaeger (kind profile, see templates/otel-collector.yaml). EKS keeps false: the pre-existing observability-namespace collector receives exports. |
 | otel.exporterOtlpAddress | string | `"http://opentelemetry-collector.observability.svc.cluster.local:4317"` | OTLP exporter address used by atenet-router directly. |
 | otel.exporterOtlpEndpoint | string | `"http://opentelemetry-collector.observability.svc.cluster.local:4317"` | OTLP endpoint for ate-otel-config (ate-api-server, ate-controller, atelet). Point at the cluster collector; empty string disables export only if the collector isn't deployed. |
@@ -63,19 +76,16 @@ Deploys the agent-substrate (ate-system) platform on EKS: ate-api-server, ate-co
 | postgres.connectionString | string | `""` | Full DSN override; empty uses the bundled server's default. Rendered into the ate-api-server-secret-envvars Secret (optional envFrom source). |
 | postgres.nodeSelector | object | `{}` | Pod nodeSelector override. Upstream postgres is multi-arch; default `{}` lets it schedule on any untainted node (amd64-only pin can strand it when ko-built workloads fill the only amd64 node). |
 | postgres.ownerRole | string | `"substrate_owner"` |  |
-| postgres.readWriteRole | string | `"substrate_readwrite"` | Roles ATE_API_POSTGRES_READ_WRITE_ROLE / ATE_API_POSTGRES_OWNER_ROLE assert. Must match the identities setup.sql creates (fixed constants in postgressetup.ReadWriteRole/OwnerRole). |
+| postgres.readWriteRole | string | `"substrate_readwrite"` | Roles ATE_API_POSTGRES_READ_WRITE_ROLE / ATE_API_POSTGRES_OWNER_ROLE assert. Must match the identities setup.sql creates (fixed constants at postgressetup.ReadWriteRole/OwnerRole). |
 | postgres.resources | object | `{"limits":{"cpu":"16","memory":"2Gi"},"requests":{"cpu":"2","memory":"1Gi"}}` | Upstream sizing sustains control-plane activation load. Local clusters override (kind overlay: 250m/1Gi requests, 2cpu limits). |
-| postgres.schema | string | `"substrate"` | ate-api-server rejects an empty schema. Official postgressetup creates the substrate schema; only change when the setup.sql in postgres.yaml was edited to match. |
+| postgres.schema | string | `"substrate"` | ate-api-server rejects an empty schema. official postgressetup creates the substrate schema; only change when the setup.sql in postgres.yaml was edited to match. |
 | postgres.storage | string | `"500Gi"` | Headroom so WAL churn cannot fill the volume (full pg_wal = PANIC). Substrate base is 500Gi; local clusters override to 1Gi. |
 | registry.password | string | `""` | Token for a PRIVATE registry. Empty creates no Secret. |
 | registry.server | string | `"ghcr.io"` | Only used to build the ate-registry pull Secret (see imagePullSecrets) when registry.password is set; never persisted. |
 | registry.username | string | `"yurifrl"` |  |
-| sandbox.gvisor.assets.amd64.gvisor.sha256 | string | `"4ae7fab988c3647d2a835d6c3c70c6a99021c562db97827592562b6c51c3e88c"` |  |
-| sandbox.gvisor.assets.amd64.gvisor.url | string | `"gs://gvisor/releases/nightly/2026-10-10/x86_64/gvisor.tar.zstd"` |  |
-| sandbox.gvisor.assets.arm64.gvisor.sha256 | string | `"aaf414f06eea7960238e43165c691f0a36cefc0593fb141e011e96211c7b6f57"` |  |
-| sandbox.gvisor.assets.arm64.gvisor.url | string | `"gs://gvisor/releases/nightly/2026-10-10/aarch64/gvisor.tar.zstd"` |  |
-| sandbox.gvisor.enabled | bool | `true` | Apply the cluster-wide gvisor SandboxConfig (name: gvisor-default). |
-| sandbox.gvisor.pauseImage | string | `"registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"` |  |
+| sandbox.gvisor.defaultVersion | string | `"v7"` | Version actors boot when their template names none. |
+| sandbox.gvisor.enabled | bool | `true` | Apply the cluster-wide gvisor SandboxConfig (name: gvisor-default, cluster-scoped since v1.0). |
+| sandbox.gvisor.versions | list | `[{"assets":{"amd64":{"gvisor":{"sha256":"708afc62f2ee82d19930c703e85f9dab4f27a78c0aec40c0f55eb1040107f1a7","url":"gs://gvisor/releases/release/20261026.0/x86_64/gvisor.tar.zstd"}},"arm64":{"gvisor":{"sha256":"6257e49955f13e6caceb2c4181c5dc5406c460e805940c944e67ad65553f5b02","url":"gs://gvisor/releases/release/20261026.0/aarch64/gvisor.tar.zstd"}}},"name":"v6","state":"Enabled"},{"assets":{"amd64":{"gvisor":{"sha256":"a1439ffbba7d212e0fde32ea79fa9bb51cbc4c5f6c16af1f047260290b861d42","url":"gs://gvisor/releases/release/20261102.0/x86_64/gvisor.tar.zstd"}},"arm64":{"gvisor":{"sha256":"f702ae92ad7a0c4134be34ca23f52966dbb696db0c0f5b8ec439210ab2cd7c6a","url":"gs://gvisor/releases/release/20261102.0/aarch64/gvisor.tar.zstd"}}},"name":"v7","state":"Enabled"}]` | Named runtime versions, verbatim from substrate v1.0.1 manifests/ate-install/sandboxconfig-gvisor.yaml (gVisor releases 20261026.0 and 20261102.0). v1.0 dropped pauseImage; the validating admission policy requires a 'gvisor' tarball asset per architecture. |
 | sandbox.microvm.assets.amd64.cloud-hypervisor.sha256 | string | `"448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc"` |  |
 | sandbox.microvm.assets.amd64.cloud-hypervisor.url | string | `"kata-assets/cloud-hypervisor"` |  |
 | sandbox.microvm.assets.amd64.kata-image.sha256 | string | `"96497f64da1de9c7473fef46c3d29ddd0805d334731cf9d903a21a5b2c33cefb"` |  |
@@ -94,7 +104,6 @@ Deploys the agent-substrate (ate-system) platform on EKS: ate-api-server, ate-co
 | sandbox.microvm.assets.arm64.virtiofsd.url | string | `"kata-assets/virtiofsd"` |  |
 | sandbox.microvm.bucket | string | `"ate-cluster-bucket"` |  |
 | sandbox.microvm.enabled | bool | `false` | Apply the microvm (cloud-hypervisor/kata) SandboxConfig. Opt-in: requires the kata asset set staged in the cluster bucket first. |
-| sandbox.microvm.pauseImage | string | `"registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"` |  |
 | storage.backend | string | `"s3"` | Object-store backend for Actor data/snapshots. On EKS: s3 (atelet + ate-api-server read AWS credentials from the pod/node IRSA). |
 | storage.rustfs.accessKey | string | `"rustfsadmin"` |  |
 | storage.rustfs.enabled | bool | `false` | Deploy the in-cluster S3-compatible store + inject static AWS credentials into ate-api-server/atelet. Local clusters only. |

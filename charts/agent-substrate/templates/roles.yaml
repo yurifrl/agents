@@ -40,6 +40,18 @@ metadata:
   name: ate-controller
   namespace: ate-system
 rules:
+# v1.0: the controller reads the egress MITM CA (it no longer gets
+# cluster-wide Secret access) to publish the egress-mitm trust bundle.
+- apiGroups:
+  - ""
+  resourceNames:
+  - egress-mitm-ca-pool
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - discovery.k8s.io
   resources:

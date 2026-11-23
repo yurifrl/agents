@@ -2,18 +2,12 @@ suite: ax
 templates:
   - deployment-ax-server.yaml
 tests:
-  - it: fails closed when snapshots.bucket is unset
-    asserts:
-      - failedTemplate:
-          errorPattern: "snapshots.bucket must be set"
-  - it: couples ax-server to the substrate control plane
+  - it: couples ax-server to the substrate v1.0 control plane
     documentSelector:
       path: kind
       value: Deployment
     release:
       namespace: ax-system
-    set:
-      snapshots.bucket: s3://ate-snapshots/ax-env/
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
@@ -23,22 +17,28 @@ tests:
           content: "--substrate-authority=api.ate-system.svc"
       - contains:
           path: spec.template.spec.containers[0].args
-          content: "--redis-addr=ax-redis.ax-system.svc.cluster.local:6379"
+          content: "--store=postgres://ax@ax-postgres.ax-system.svc.cluster.local:5432/ax?sslmode=disable"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--actor-jwt-issuer=https://idp.ate-system.svc"
       - contains:
           path: spec.template.spec.containers[0].args
           content: "--template-atespace=default"
-  - it: points ax-server at an external redis when the bundled one is disabled
-    documentSelector:
-      path: kind
-      value: Deployment
-    set:
-      snapshots.bucket: s3://ate-snapshots/ax-env/
-      redis.local.enabled: false
-      redis.address: redis.redis.svc.cluster.local:6379
-    asserts:
       - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--redis-addr=redis.redis.svc.cluster.local:6379"
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ATENET_ROUTER_ADDR
+            value: https://atenet-router.ate-system.svc.cluster.local:443
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AX_DEFAULT_TASK_IMAGE
+            value: ghcr.io/yurifrl/ax/ax-task-runner:v0.4.0-rc.1
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            containerPort: 8081
+            name: runner
       - contains:
           path: spec.template.spec.volumes[0].projected.sources
           content:
@@ -48,11 +48,32 @@ tests:
               path: token
       - equal:
           path: spec.template.spec.containers[0].image
-          value: "ghcr.io/yurifrl/ax/ax-server:7b3347f5a8af37676f711e750f354014a1705e24@sha256:0eeb5c568497ec45a93126f5fdf6506b815338eb52fadbc3a7a7fb50fad63aae"
-  - it: fails closed when local redis is disabled without an address
+          value: "ghcr.io/yurifrl/ax/ax-server:v0.4.0-rc.1"
+  - it: exposes the runner port only to atenet-egress
+    documentSelector:
+      path: kind
+      value: NetworkPolicy
     set:
-      snapshots.bucket: s3://ate-snapshots/ax-env/
-      redis.local.enabled: false
+      networkPolicy.extraIngressPorts: [15008]
     asserts:
-      - failedTemplate:
-          errorPattern: "redis.address must be set when redis.local.enabled=false"
+      - equal:
+          path: spec.ingress[1].ports[0].port
+          value: 8081
+      - equal:
+          path: spec.ingress[1].from[0].podSelector.matchLabels.app
+          value: atenet-egress
+      - contains:
+          path: spec.ingress[0].ports
+          content:
+            protocol: TCP
+            port: 15008
+  - it: passes a custom runner endpoint through
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      runner.endpoint: ax-server-runner.ax.svc.cluster.local:8081
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--runner-endpoint=ax-server-runner.ax.svc.cluster.local:8081"

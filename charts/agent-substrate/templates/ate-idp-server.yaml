@@ -1,0 +1,114 @@
+{{- if .Values.idpServer.enabled }}
+# ate-idp-server (substrate v1.0.1 manifests/ate-install/ate-idp-server.yaml):
+# the OIDC issuer for actor JWTs. Serves /.well-known/openid-configuration and
+# the JWKS derived from the actor-id-jwt-pool Secret ate-api-server signs with,
+# over TLS with its servicedns certificate (SAN idp.ate-system.svc). ate-setup
+# appends --issuer=<ATE_API_ACTOR_JWT_ISSUER>; the chart renders it from
+# ateapi.actorJwtIssuer so both always agree.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ate-idp-server
+  namespace: ate-system
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-idp-server
+  namespace: ate-system
+spec:
+  replicas: {{ .Values.idpServer.replicas }}
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: ate-idp-server
+  template:
+    metadata:
+      labels:
+        app: ate-idp-server
+    spec:
+      serviceAccountName: ate-idp-server
+      nodeSelector:
+        {{- include "agent-substrate.nodeSelector" . | nindent 8 }}
+      containers:
+      - name: ate-idp-server
+        image: {{ .Values.images.idpServer.repository }}:{{ .Values.images.idpServer.tag }}
+        args:
+        - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
+        - --server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem
+        - --issuer={{ .Values.ateapi.actorJwtIssuer }}
+        ports:
+        - name: https
+          containerPort: 8443
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: https
+            scheme: HTTPS
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: https
+            scheme: HTTPS
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        # The serving certificate, with a DNS SAN for each Service that
+        # selects the pod: idp.ate-system.svc.
+        - name: servicedns
+          mountPath: /run/servicedns.podcert.ate.dev
+        - name: actor-id-jwt-pool
+          mountPath: /run/actor-id-jwt-pool
+      volumes:
+      - name: servicedns
+        projected:
+          sources:
+          - podCertificate:
+              signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+      # The pool ate-api-server signs with (out-of-band Secret, see README).
+      - name: actor-id-jwt-pool
+        projected:
+          sources:
+          - secret:
+              name: actor-id-jwt-pool
+              items:
+              - key: pool
+                path: pool.json
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ate-idp-server
+  namespace: ate-system
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: ate-idp-server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: idp
+  namespace: ate-system
+spec:
+  selector:
+    app: ate-idp-server
+  ports:
+  - name: https
+    port: 443
+    targetPort: https
+    appProtocol: https
+{{- end }}

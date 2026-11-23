@@ -1,12 +1,14 @@
 apiVersion: v2
 name: ax
 description: >
-  Deploys google/ax: ax-server (direct task executor) and Redis, into the
-  Helm release namespace. ax-server talks to the agent-substrate control
-  plane (api.ate-system.svc), so this chart must deploy after agent-substrate.
+  Deploys google/ax v0.4.0-rc.1: ax-server (task executor, Gateway API and
+  runner endpoint) and its PostgreSQL store, into the Helm release namespace.
+  ax-server talks to the agent-substrate v1.0.x control plane
+  (api.ate-system.svc, idp.ate-system.svc, atenet-router/egress), so this
+  chart must deploy after agent-substrate.
 type: application
-version: 0.2.0
-appVersion: "92d297e"
+version: 0.3.0
+appVersion: "v0.4.0-rc.1"
 home: https://github.com/yurifrl/agents
 sources:
   - https://github.com/yurifrl/agents/tree/main/k8s/charts/ax

@@ -19,7 +19,7 @@ data:
         mode: tunnel
       accessLog:
         add:
-          substrate.connect.authority: source.connectHeaders["host"]
+          substrate.connect.authority: 'destination.address + ":" + string(destination.port)'
       substrateEgressActorResolution:
         host: api.ate-system.svc:443
         policies:
@@ -71,7 +71,20 @@ data:
                 root: /etc/ssl/certs/ca-certificates.crt
           policies:
             substrateEgress: &egressPolicy
-              #ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS
+              {{- if .Values.credentialProvider.enabled }}
+              # ate-setup's #ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS block for
+              # --credential-provider='{"name":"k8s.io"}'.
+              credentialProviders:
+              - uriAuthority: "k8s.io"
+                target:
+                  host: "k8s-credential-provider.ate-system.svc:50051"
+                  policies:
+                    backendTLS:
+                      hostname: "k8s-credential-provider.ate-system.svc"
+                      cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                      key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                      root: /run/servicedns-ca/trust-bundle.pem
+              {{- end }}
               host: api.ate-system.svc:443
               policies:
                 backendTLS:
@@ -95,7 +108,7 @@ data:
               body: WebSocket egress is not supported
         - backends:
           - dynamic:
-              target: source.connectHeaders["host"]
+              target: 'destination.address + ":" + string(destination.port)'
           policies:
             substrateEgress: *egressPolicy
       - protocol: TLS
@@ -110,38 +123,47 @@ metadata:
 ---
 apiVersion: v1
 data:
+  # substrate v1.0.1 components/agentgateway-static-mtls (ate-setup always
+  # composes it with the agentgateway dataplane): mTLS-only ingress, clients
+  # authorized by SPIFFE ID; the plaintext :8080/:8081 listeners are gone.
   config.yaml: |
     # yaml-language-server: $schema=https://agentgateway.dev/schema/config
     config:
       statsAddr: 0.0.0.0:15020
       backend:
-        # Guest process services live at the actor sandbox's link-local
-        # address (169.254.17.2). agentgateway v1.7+ refuses dynamic backends
-        # resolving to loopback/link-local unless this is set.
+        # The dynamic-backend guard checks CONNECT authority before tunneling.
+        # substrateIngress resolves ate-target-actor through ate-api-server to
+        # select the worker's mTLS atunnel endpoint; atunnel uses only the
+        # authority's port, so a loopback authority cannot dial the router's
+        # own loopback. Ingress-only, all backends tunneled to atunnel.
         allowDynamicLoopback: true
 
     frontendPolicies:
+      networkAuthorization:
+        rules:
+        - allow: >-
+            source.spiffeId in {{ toJson (default (list) .Values.atenetRouter.ingressAllowedSpiffeIds) }}
       tracing:
         host: $AGENTGATEWAY_OTLP_ADDRESS
         protocol: grpc
-        # Keep in sync with the router's dataPlaneTraceRatio.
         randomSampling: 0.01
 
     gateways:
-      http:
-        port: 8080
-        protocol: HTTP
       https:
         port: 8443
         protocol: HTTPS
-        tls:
+        tls: &ingress-tls
           cert: /run/servicedns.podcert.ate.dev/credential-bundle.pem
           key: /run/servicedns.podcert.ate.dev/credential-bundle.pem
+          root: /run/podidentity.podcert.ate.dev/trust-bundle.pem
 
     backends:
     - name: dynamic
       dynamic: {}
       policies:
+        # Actors use HTTP/1.1 unless the request is gRPC.
+        http:
+          version: HTTP/1.1
         # All actor traffic reaches atunnel over mTLS CONNECT.
         backendTunnel:
           proxy:
@@ -157,12 +179,11 @@ data:
     routes:
     - name: substrate-actors
       gateways:
-      - http
       - https
       matches:
       - path:
           pathPrefix: /
-      policies:
+      policies: &substrate-ingress
         substrateIngress:
           host: api.ate-system.svc:443
           # AgentGateway only uses atunnel's CONNECT listener.
@@ -174,21 +195,29 @@ data:
               root: /run/servicedns-ca/trust-bundle.pem
       backends:
       - backend: /dynamic
+    - name: substrate-actors-grpc
+      gateways:
+      - https
+      matches: &grpc-matches
+      - method: POST
+        headers:
+        - name: content-type
+          value:
+            regex: '(?i)^application/grpc([+;].*)?$'
+      policies: *substrate-ingress
+      backends: &grpc-backends
+      - backend: /dynamic
+        policies:
+          http:
+            version: HTTP/2.0
 
     # Terminate client CONNECT before internal HTTP routing.
     binds:
-    - port: 8081
-      tunnelProtocol: connect
-      listeners:
-      - protocol: HTTP
-        routes: []
     - port: 8444
       tunnelProtocol: connect
       listeners:
       - protocol: HTTPS
-        tls:
-          cert: /run/servicedns.podcert.ate.dev/credential-bundle.pem
-          key: /run/servicedns.podcert.ate.dev/credential-bundle.pem
+        tls: *ingress-tls
         routes: []
     - mode: internal
       listeners:
@@ -198,17 +227,13 @@ data:
           matches:
           - path:
               pathPrefix: /
-          policies:
-            substrateIngress:
-              host: api.ate-system.svc:443
-              connectTargetPort: 8443
-              policies:
-                backendTLS:
-                  cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                  key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                  root: /run/servicedns-ca/trust-bundle.pem
+          policies: *substrate-ingress
           backends:
           - backend: /dynamic
+        - name: substrate-actors-tunneled-grpc
+          matches: *grpc-matches
+          policies: *substrate-ingress
+          backends: *grpc-backends
 kind: ConfigMap
 metadata:
   name: atenet-router-agentgateway-config
@@ -216,9 +241,8 @@ metadata:
 
 ---
 # ate-api-server non-secret env, injected via the optional
-# ate-api-server-envvars envFrom source (matches ate-setup's
-# steps/apienv.go: ATE_API_POSTGRES_READ_WRITE_ROLE, ATE_API_POSTGRES_OWNER_ROLE,
-# ATE_API_ACTOR_JWT_ISSUER). Actor JWTs are minted by MintActorJWT and signed
+# ate-api-server-envvars envFrom source (matches ate-setup v1.0.1
+# steps/apienv.go CreateAPIServerEnvVars). Actor JWTs are minted by MintActorJWT and signed
 # from the actor-id-jwt-pool secret; the issuer is the iss claim that relying
 # parties discover via <issuer>/.well-known/openid-configuration.
 apiVersion: v1
@@ -230,6 +254,10 @@ data:
   ATE_API_POSTGRES_READ_WRITE_ROLE: {{ .Values.postgres.readWriteRole | quote }}
   ATE_API_POSTGRES_OWNER_ROLE: {{ .Values.postgres.ownerRole | quote }}
   ATE_API_ACTOR_JWT_ISSUER: {{ .Values.ateapi.actorJwtIssuer | quote }}
+  # The control object-store sidecar expands $(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT)
+  # into its args, so the key must exist even when empty (s3).
+  ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT: {{ .Values.ateapi.transferServiceAccount | quote }}
+  ATE_API_SNAPSHOT_LOCATION: {{ .Values.ateapi.snapshotLocation | quote }}
 
 ---
 # ate-api-server OIDC authentication config (ate-setup's
@@ -243,8 +271,9 @@ metadata:
   name: ate-api-authentication
   namespace: ate-system
 data:
+  # v1.0 parses this strictly (yaml.UnmarshalStrict): only jwtProviders is
+  # accepted; the v0.5 actorIdentityJWTProvider key would crash ate-api-server.
   authentication.yaml: |
-    actorIdentityJWTProvider: kubernetes
     jwtProviders:
     - name: kubernetes
       issuer: {{ .Values.ateapi.authentication.issuer }}
@@ -253,3 +282,17 @@ data:
       certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
       discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
       {{- end }}
+
+---
+# ate-api-server config file (--config-file; ate-setup v1.0 `create
+# api-config`, prototext of ateconfigpb.APIConfig).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ate-api-config
+  namespace: ate-system
+data:
+  apiconfig.textproto: |
+    logging: {
+      level: {{ .Values.ateapi.logLevel | quote }}
+    }

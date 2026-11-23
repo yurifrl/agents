@@ -17,11 +17,10 @@ spec:
       labels:
         app: atelet
     spec:
-      {{- if .Values.atelet.objectStorePlugin }}
-      # Node object-store plugin (native sidecar): moves snapshots and sandbox
-      # assets between this node and object storage over a pod-local Unix
-      # socket. Starts before atelet so the socket exists when it connects.
-      # Mirrors manifests/ate-install/kind/atelet at v0.5.0.
+      # Node object-store plugin (native sidecar, mandatory since v0.5): moves
+      # snapshots and sandbox assets between this node and object storage over
+      # a pod-local Unix socket. Starts before atelet so the socket exists when
+      # it connects. Env mirrors manifests/ate-install/kind/atelet at v1.0.1.
       initContainers:
       - name: objectstore-plugin
         image: {{ .Values.images.objectStorePlugin.repository }}:{{ .Values.images.objectStorePlugin.tag }}
@@ -44,6 +43,7 @@ spec:
           failureThreshold: 30
         # Reads/writes under the /var/lib/ate hostPath as root, like atelet.
         securityContext:
+          allowPrivilegeEscalation: false
           runAsUser: 0
           runAsGroup: 0
           capabilities:
@@ -55,10 +55,11 @@ spec:
             memory: 128Mi
         env:
         # Object storage for snapshot transfers and sandbox assets. atelet
-        # itself no longer reads these and exits if ATE_STORAGE_BACKEND is set.
+        # itself does not read these and exits if ATE_STORAGE_BACKEND is set.
         - name: ATE_STORAGE_BACKEND
           value: {{ .Values.storage.backend }}
         {{- if .Values.storage.rustfs.enabled }}
+        # Local-cluster object store (see rustfs.yaml): static creds instead of IRSA.
         - name: AWS_ACCESS_KEY_ID
           value: {{ .Values.storage.rustfs.accessKey | quote }}
         - name: AWS_SECRET_ACCESS_KEY
@@ -70,28 +71,35 @@ spec:
         - name: AWS_S3_USE_PATH_STYLE
           value: "true"
         {{- end }}
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         envFrom:
         - configMapRef:
             name: ate-otel-config
         volumeMounts:
-        - name: run-ateom
+        - name: ate-base
           mountPath: /var/lib/ate
+          mountPropagation: HostToContainer
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
+        - name: servicedns-ca
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
         - name: asset-staging
           mountPath: /var/lib/objectstore-plugin/asset-staging
-      {{- end }}
       containers:
       - args:
+        # No --image-credential-provider-*: those point at GKE node paths
+        # (/home/kubernetes/bin, /etc/srv/kubernetes); actor images here are
+        # public and pulled anonymously (same as upstream's kind overlay).
         - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
         - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
         - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
         - --drain-delay=0s
         - --drain-timeout=5m
-        {{- if .Values.atelet.objectStorePlugin }}
-        # v0.5.0: snapshot/object-store work lives in the node plugin sidecar.
         - --objectstore-plugin-socket=/run/objectstore-plugin/node.sock
-        {{- end }}
         {{- range .Values.atelet.extraArgs }}
         - {{ . | quote }}
         {{- end }}
@@ -114,23 +122,6 @@ spec:
               fieldPath: metadata.uid
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),k8s.node.name=$(NODE_NAME),service.instance.id=$(POD_UID)
-        {{- if not .Values.atelet.objectStorePlugin }}
-        - name: ATE_STORAGE_BACKEND
-          value: {{ .Values.storage.backend }}
-        {{- if .Values.storage.rustfs.enabled }}
-        # Local-cluster object store (see rustfs.yaml): static creds instead of IRSA.
-        - name: AWS_ACCESS_KEY_ID
-          value: {{ .Values.storage.rustfs.accessKey | quote }}
-        - name: AWS_SECRET_ACCESS_KEY
-          value: {{ .Values.storage.rustfs.secretKey | quote }}
-        - name: AWS_REGION
-          value: {{ .Values.storage.rustfs.region | quote }}
-        - name: AWS_ENDPOINT_URL
-          value: {{ .Values.storage.rustfs.endpoint | quote }}
-        - name: AWS_S3_USE_PATH_STYLE
-          value: "true"
-        {{- end }}
-        {{- end }}
         envFrom:
         - configMapRef:
             name: ate-otel-config
@@ -143,8 +134,8 @@ spec:
           periodSeconds: 10
         name: atelet
         ports:
-        - containerPort: 8085
-          hostPort: 8085
+        # v1.0: atelet serves gRPC on the pod IP at 21998 (no hostPort).
+        - containerPort: 21998
           name: grpc
         - containerPort: 9090
           name: prometheus
@@ -164,17 +155,18 @@ spec:
             cpu: 50m
             memory: 128Mi
         securityContext:
-          # runsc needs writable cgroupfs (/sys/fs/cgroup/cgroup.subtree_control)
-          # at `start` time to set up the sandbox cgroup; an unprivileged
-          # container mounts cgroupfs read-only and runsc start exits 128.
+          # Deliberate deviation from upstream (CHOWN/DAC_OVERRIDE/FOWNER/FSETID
+          # as root): runsc needs writable cgroupfs
+          # (/sys/fs/cgroup/cgroup.subtree_control) at `start` time to set up
+          # the sandbox cgroup; on talos an unprivileged container mounts
+          # cgroupfs read-only and runsc start exits 128.
           privileged: true
         volumeMounts:
         - mountPath: /var/lib/ate
-          name: run-ateom
-        {{- if .Values.atelet.objectStorePlugin }}
+          mountPropagation: HostToContainer
+          name: ate-base
         - mountPath: /run/objectstore-plugin
           name: objectstore-plugin
-        {{- end }}
         - mountPath: /run/podidentity.podcert.ate.dev
           name: podidentity
         - mountPath: /run/servicedns.podcert.ate.dev
@@ -192,7 +184,10 @@ spec:
         # never a version, so image-tag bumps roll out without re-labeling nodes.
         ate.dev/substrate: "true"
         {{- include "agent-substrate.nodeSelector" . | nindent 8 }}
-      priorityClassName: ate-node-critical
+      # v1.0 dropped the ate-node-critical PriorityClass; the
+      # atelet-critical-pods ResourceQuota (priorityclasses.yaml) admits
+      # system-*-critical pods outside kube-system.
+      priorityClassName: system-cluster-critical
       serviceAccountName: atelet
       terminationGracePeriodSeconds: 330
       tolerations:
@@ -200,19 +195,14 @@ spec:
         key: ate.dev/sandboxClass
         operator: Exists
       volumes:
+      - name: objectstore-plugin
+        emptyDir: {}
+      - name: asset-staging
+        emptyDir: {}
       - hostPath:
           path: /var/lib/ate
           type: DirectoryOrCreate
-        name: run-ateom
-      {{- if .Values.atelet.objectStorePlugin }}
-      - name: objectstore-plugin
-        emptyDir: {}
-      # Holds asset downloads until verified; plugin caps usage at
-      # --asset-staging-capacity, +1Gi slack for filesystem overhead.
-      - name: asset-staging
-        emptyDir:
-          sizeLimit: 9Gi
-      {{- end }}
+        name: ate-base
       - hostPath:
           path: /var/lib/kubelet/plugins
           type: DirectoryOrCreate

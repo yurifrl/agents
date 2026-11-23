@@ -2,6 +2,14 @@ suite: agent-substrate
 templates:
   - daemonsets-atelet.yaml
   - sandboxconfig-gvisor.yaml
+  - deployments-ate-api-server.yaml
+  - configmaps.yaml
+  - ate-idp-server.yaml
+  - workerpool-gvisor.yaml
+# Every test renders all suite templates; the api-server template fails closed
+# without a snapshot location, so set one suite-wide.
+set:
+  ateapi.snapshotLocation: s3://ate-snapshots/
 tests:
   - it: names the atelet DaemonSet per official install (no version suffix)
     template: daemonsets-atelet.yaml
@@ -9,23 +17,115 @@ tests:
       - equal:
           path: metadata.name
           value: atelet
-  - it: renders the gvisor SandboxConfig with gs:// assets
+      - equal:
+          path: spec.template.spec.priorityClassName
+          value: system-cluster-critical
+  - it: renders the cluster-scoped v1 gvisor SandboxConfig with release tarballs
     template: sandboxconfig-gvisor.yaml
     asserts:
       - equal:
+          path: apiVersion
+          value: ate.dev/v1
+      - notExists:
+          path: metadata.namespace
+      - equal:
           path: metadata.name
           value: gvisor-default
-      # Versions group pauseImage + assets; defaultVersion names the one
-      # actors boot. Values match v0.5.0's official sandboxconfig-gvisor.yaml.
+      # Values match v1.0.1's official sandboxconfig-gvisor.yaml.
       - equal:
           path: spec.defaultVersion
-          value: v3
+          value: v7
       - equal:
-          path: spec.versions[0].name
-          value: v3
+          path: spec.versions[1].name
+          value: v7
+      - notExists:
+          path: spec.versions[1].pauseImage
       - equal:
-          path: spec.versions[0].pauseImage
-          value: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+          path: spec.versions[1].assets.amd64.gvisor.url
+          value: gs://gvisor/releases/release/20261102.0/x86_64/gvisor.tar.zstd
+  - it: fails closed without a snapshot location
+    template: deployments-ate-api-server.yaml
+    set:
+      ateapi.snapshotLocation: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "ateapi.snapshotLocation must be set"
+  - it: passes the v1.0 required api-server flags
+    template: deployments-ate-api-server.yaml
+    set:
+      ateapi.snapshotLocation: s3://ate-snapshots/
+      ateapi.authz.bootstrapOwners:
+        - system:serviceaccount:ate-system:ate-client
+        - system:serviceaccount:ax-system:ax-server
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --authz-bootstrap-owners=system:serviceaccount:ate-system:ate-client,system:serviceaccount:ax-system:ax-server
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --snapshot-location=@env
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
+  - it: keeps the authentication config strict-parse clean
+    template: configmaps.yaml
+    documentSelector:
+      path: metadata.name
+      value: ate-api-authentication
+    asserts:
+      - notMatchRegex:
+          path: data["authentication.yaml"]
+          pattern: actorIdentityJWTProvider
+  - it: renders the router SPIFFE allowlist
+    template: configmaps.yaml
+    documentSelector:
+      path: metadata.name
+      value: atenet-router-agentgateway-config
+    set:
+      atenetRouter.ingressAllowedSpiffeIds:
+        - spiffe://cluster.local/ns/ax-system/sa/ax-server
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'source.spiffeId in \["spiffe://cluster.local/ns/ax-system/sa/ax-server"\]'
+  - it: denies every router client when no SPIFFE ID is allowed
+    template: configmaps.yaml
+    documentSelector:
+      path: metadata.name
+      value: atenet-router-agentgateway-config
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'source.spiffeId in \[\]'
+  - it: writes the snapshot location into the api-server env
+    template: configmaps.yaml
+    documentSelector:
+      path: metadata.name
+      value: ate-api-server-envvars
+    set:
+      ateapi.snapshotLocation: s3://ate-snapshots/
+    asserts:
       - equal:
-          path: spec.versions[0].assets.amd64.gvisor.url
-          value: gs://gvisor/releases/nightly/2026-10-10/x86_64/gvisor.tar.zstd
+          path: data.ATE_API_SNAPSHOT_LOCATION
+          value: s3://ate-snapshots/
+  - it: points ate-idp-server at the actor JWT issuer
+    template: ate-idp-server.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --issuer=https://idp.ate-system.svc
+  - it: runs the v1 ateworker-gvisor image bound to gvisor-default
+    template: workerpool-gvisor.yaml
+    asserts:
+      - equal:
+          path: apiVersion
+          value: ate.dev/v1
+      - matchRegex:
+          path: spec.workerImage
+          pattern: '^ghcr.io/agent-substrate/substrate/ateworker-gvisor:v1\.0\.1@sha256:'
+      - equal:
+          path: spec.sandboxClasses[0].configRef.name
+          value: gvisor-default

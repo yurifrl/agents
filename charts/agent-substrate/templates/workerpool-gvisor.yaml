@@ -5,10 +5,10 @@
 # actor" otherwise). spec.sandboxClasses (the LIST field) is what the
 # controller mirrors onto Worker.sandbox_class — the singular legacy
 # spec.sandboxClass field is ignored, leaving the Worker class-less and
-# unschedulable. workerImage must resolve on amd64 only: substrate ko builds
-# are amd64, and the atelet DaemonSet already pins nodes to
-# ate.dev/substrate via node labels.
-apiVersion: ate.dev/v1alpha1
+# unschedulable. workerImage is the v1.0 ateworker-gvisor (formerly
+# ateom-gvisor) upstream release image; the atelet DaemonSet already pins
+# nodes to ate.dev/substrate via node labels.
+apiVersion: ate.dev/v1
 kind: WorkerPool
 metadata:
   name: gvisor-pool
@@ -23,7 +23,11 @@ spec:
   replicas: {{ .Values.workers.gvisor.replicas }}
   sandboxClasses:
     - name: gvisor
-  workerImage: "{{ .Values.images.ateomGvisor.repository }}:{{ .Values.images.ateomGvisor.tag }}"
+      {{- if .Values.sandbox.gvisor.enabled }}
+      configRef:
+        name: gvisor-default
+      {{- end }}
+  workerImage: "{{ .Values.images.ateworkerGvisor.repository }}:{{ .Values.images.ateworkerGvisor.tag }}"
   template:
     {{- $nodeSelector := include "agent-substrate.nodeSelector" (dict "root" $ "overrides" .Values.workers.gvisor.nodeSelector) }}
     {{- if $nodeSelector }}

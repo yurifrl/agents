@@ -1,25 +1,32 @@
-# home talos-default profile. ko-built images mirrored to public
-# ghcr.io/yurifrl/ax/*; redis is the official upstream image. No pull secret.
-# Everything stays on amd64 (ko single-arch builds) via the chart's default
-# nodeSelector.
+# home talos-default profile. ax images are built from google/ax v0.4.0-rc.1
+# and published to public ghcr.io/yurifrl/ax/* by the build-images workflow;
+# postgres is the official upstream image. No pull secret. Everything stays on
+# amd64 via the chart's default nodeSelector.
 
 images:
   server:
     repository: ghcr.io/yurifrl/ax/ax-server
-  redis:
-    repository: docker.io/library/redis
+  taskRunner:
+    repository: ghcr.io/yurifrl/ax/ax-task-runner
 
-# Shared cluster redis (ns redis, db 0 of the index registry in
-# k8s/applications/redis.yaml) instead of a bundled ax-redis Deployment.
-redis:
-  local:
-    enabled: false
-  address: redis.redis.svc.cluster.local:6379
+postgres:
+  # Longhorn default class; small home footprint.
+  storage: 5Gi
+  resources:
+    requests:
+      cpu: 50m
+      # dell01 runs close to its allocatable memory.
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
 
-snapshots:
-  # rustfs (agent-substrate) hosts the bucket; ateom workers read/write
-  # snapshots with its static credentials.
-  bucket: "s3://ate-snapshots/"
+networkPolicy:
+  enabled: true
+  # ax-system is in the Istio ambient mesh (ArgoCD managedNamespaceMetadata):
+  # the tailnet ingress gateway reaches ax-server through ztunnel on HBONE
+  # :15008. Worker pods (not meshed) still only see the scoped ports.
+  extraIngressPorts: [15008]
 
 # Public images: no registry Secret.
 registry:

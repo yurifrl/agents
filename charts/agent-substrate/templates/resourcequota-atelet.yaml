@@ -1,0 +1,20 @@
+# substrate v1.0 replaced the ate-node-critical PriorityClass with the
+# built-in system-cluster-critical class (atelet DaemonSet). The apiserver's
+# default priority admission only admits system-*-critical pods outside
+# kube-system when a ResourceQuota scoped to those classes exists in the
+# namespace; this quota is that grant (effectively unlimited).
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: atelet-critical-pods
+  namespace: ate-system
+spec:
+  hard:
+    pods: 1G
+  scopeSelector:
+    matchExpressions:
+    - operator: In
+      scopeName: PriorityClass
+      values:
+      - system-node-critical
+      - system-cluster-critical
