@@ -90,7 +90,7 @@ jobs:
           # -B (base import path) publishes straight to $AX/ax-server; the
           # default md5-suffixed name is a separate ghcr package this repo's
           # token has no write access to.
-          (cd ax && KO_DOCKER_REPO="$AX" ko build -B --sbom=none --platform=linux/amd64 -t "$TAG" ./cmd/ax-server)
+          (cd ax && KO_DOCKER_REPO="$AX" ko build -B --sbom=none --platform=linux/amd64,linux/arm64 -t "$TAG" ./cmd/ax-server)
           (cd ax && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/linux_amd64/ax-task-runner ./cmd/ax-task-runner)
           (cd ax && docker build --platform linux/amd64 --build-arg TARGETARCH=amd64 -t "$AX/ax-task-runner:$TAG" -f Dockerfile.task-runner .)
           docker push "$AX/ax-task-runner:$TAG"
