@@ -94,7 +94,9 @@ jobs:
           (cd ax && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/linux_amd64/ax-task-runner ./cmd/ax-task-runner)
           (cd ax && docker build --platform linux/amd64 --build-arg TARGETARCH=amd64 -t "$AX/ax-task-runner:$TAG" -f Dockerfile.task-runner .)
           docker push "$AX/ax-task-runner:$TAG"
-          # Claude Code image: the task-runner above plus the claude CLI, keeping
+          # Claude Code image: the task-runner above plus the claude CLI (a real
+          # 0755 binary in /usr/local/bin: tasks may run as non-root and can't
+          # follow a symlink into /root), keeping
           # the DEFAULT runner. Upstream's claude-code-runner (Dockerfile.claude-code)
           # never enters pull mode at v0.4.0-rc.1, so it never claims its
           # assignment from ax-server and hangs. Tasks call claude via
@@ -102,7 +104,7 @@ jobs:
           # claude installer aborts under qemu).
           printf '%s\n' \
             "FROM $AX/ax-task-runner:$TAG" \
-            'RUN curl -fsSL https://claude.ai/install.sh | bash -s -- latest && ln -s /root/.local/bin/claude /usr/local/bin/claude && claude --version' \
+            'RUN curl -fsSL https://claude.ai/install.sh | bash -s -- latest && install -m 0755 "$(readlink -f /root/.local/bin/claude)" /usr/local/bin/claude && rm -rf /root/.local/share/claude /root/.local/bin/claude && /usr/local/bin/claude --version' \
             'ENV IS_SANDBOX=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1' \
             > /tmp/Dockerfile.claude-code
           docker build --platform linux/amd64 -t "$AX/claude-code:$TAG" -f /tmp/Dockerfile.claude-code /tmp
