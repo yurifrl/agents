@@ -94,6 +94,15 @@ jobs:
           (cd ax && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/linux_amd64/ax-task-runner ./cmd/ax-task-runner)
           (cd ax && docker build --platform linux/amd64 --build-arg TARGETARCH=amd64 -t "$AX/ax-task-runner:$TAG" -f Dockerfile.task-runner .)
           docker push "$AX/ax-task-runner:$TAG"
+          # Claude Code image: the task-runner above plus the claude CLI, with
+          # claude-code-runner as ax-task-runner (builds `claude --print` from
+          # Task spec.config). Upstream: Dockerfile.claude-code, built amd64-native
+          # (the claude installer aborts under qemu).
+          (cd ax && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/linux_amd64/claude-code-runner ./cmd/runners/claude-code-runner)
+          (cd ax && docker build --platform linux/amd64 --build-arg TARGETARCH=amd64 \
+            --build-arg BASE_IMAGE="$AX/ax-task-runner:$TAG" \
+            -t "$AX/claude-code:$TAG" -f Dockerfile.claude-code .)
+          docker push "$AX/claude-code:$TAG"
 
       - name: Verify published images
         env:
@@ -101,7 +110,7 @@ jobs:
         run: |
           set -euo pipefail
           fail=0
-          for ref in "ax/ax-server:$AX_REF" "ax/ax-task-runner:$AX_REF"; do
+          for ref in "ax/ax-server:$AX_REF" "ax/ax-task-runner:$AX_REF" "ax/claude-code:$AX_REF"; do
             img="$GHCR/$ref"
             # Index manifests: arch per entry in .manifests[].platform.
             # Single manifests (ko output): arch lives in the config blob.
