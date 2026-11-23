@@ -5,6 +5,16 @@
 # ax-server is built multi-arch and postgres is multi-arch upstream, so ax pods
 # may run on any node; dell01 (the only amd64 worker) is kept for the substrate.
 nodeSelector: {}
+# rpi01 is offsite (reaches the cluster over Tailscale): ax-server's postgres
+# migrations over that link outlast its liveness probe.
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values: [rpi01]
 
 images:
   server:

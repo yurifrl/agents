@@ -41,6 +41,10 @@ spec:
       serviceAccountName: ax-server
       nodeSelector:
         {{- include "ax.nodeSelector" . | nindent 8 }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

@@ -153,6 +153,9 @@ registry:
 # [{name: ax-registry}]).
 imagePullSecrets: []
 
+# -- Pod affinity for all ax workloads (ax-server, ax-postgres).
+affinity: {}
+
 # -- Pod nodeSelector for all ax workloads. ax-server/ax-task-runner are
 # linux/amd64-only builds (the workflow passes --platform=linux/amd64); when
 # this key is ABSENT the helper defaults every pod to kubernetes.io/arch:

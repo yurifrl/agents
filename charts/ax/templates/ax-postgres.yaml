@@ -63,6 +63,10 @@ spec:
       terminationGracePeriodSeconds: 60
       nodeSelector:
         {{- include "ax.nodeSelector" . | nindent 8 }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
