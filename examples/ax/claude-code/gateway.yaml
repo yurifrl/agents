@@ -1,0 +1,14 @@
+# Gateway for Claude Code tasks. ax apply -f this file (stored in ax-server, not git-synced).
+apiVersion: ax.io/v1alpha1
+kind: Gateway
+metadata: { name: claude-code, atespace: default }
+spec:
+  egress:
+    - https:
+        hostnames: ["api.anthropic.com"]
+        effects:
+          replaceHeaders:
+            - header: x-api-key
+              credentialUri: "ate-secret://k8s.io/default/ax-system/anthropic-creds/api-key"
+    - https:
+        hostnames: ["github.com", "pypi.org", "files.pythonhosted.org", "registry.npmjs.org"]

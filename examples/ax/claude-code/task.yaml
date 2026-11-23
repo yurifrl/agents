@@ -1,0 +1,55 @@
+# Claude Code on the substrate (ax v0.4.0-rc.1).
+#
+#   ax apply -f examples/ax/claude-code/gateway.yaml   # once
+#   ax apply -f examples/ax/claude-code/task.yaml      # creates Workspace (clones) + Task
+#   ax resume task claude-hello                        # new tasks start Suspended
+#   ax get tasks                                       # Working -> Succeeded/Failed
+#   ax describe task claude-hello                      # outcome + claude's stdout
+#   ax delete task claude-hello
+#
+# ax v0.4.0-rc.1 CLI quirks: apply waits at most 2 min, resume 5 min. The
+# first run of a new image or workspace can outlast that ("deadline
+# exceeded"): check `ax get tasks` / `ax get workspaces` and apply again. If a
+# workspace sticks in Preparing, delete it and apply again. Use the kubectl
+# tunnel (unset AX_SERVER) for ax ssh; the tailnet gateway path returns 404.
+#
+# Network: the task can reach only what the `claude-code` Gateway allows
+# (api.anthropic.com, github.com, pypi, npm). The gateway swaps the placeholder
+# ANTHROPIC_API_KEY for the real key (1Password kubernetes/agents) outside
+# the sandbox. Gateway definition: examples/ax/claude-code/gateway.yaml.
+apiVersion: ax.io/v1alpha1
+kind: Workspace
+metadata: { name: hello-repo, atespace: default }
+spec:
+  setup:
+    git:
+      - name: origin
+        repo: "https://github.com/octocat/Hello-World.git"
+        ref: "master"
+    # The clone runs in a temporary setup actor with its own network: it needs
+    # a Gateway too (github.com is in claude-code). The task doesn't inherit it.
+    gateway: { name: claude-code }
+---
+apiVersion: ax.io/v1alpha1
+kind: Task
+metadata: { name: claude-hello, atespace: default }
+spec:
+  profile:
+    # ax-task-runner + claude CLI (build-images.yaml). The task calls claude
+    # itself through commands: rc1's spec.config runner never starts.
+    image: "ghcr.io/yurifrl/ax/claude-code:v0.4.0-rc.1@sha256:31e6ff4f70c99d8d9a555ce31a94ef038b7f47fc8fc4175e39478018c6baa437"
+    resources: { limits: { cpu: "1", memory: 2Gi } }
+  # Runs in the workspace root (/workspace, the cloned repo).
+  commands:
+    - claude
+    - --print
+    - --model=claude-haiku-5-5
+    - --max-turns=10
+    - --dangerously-skip-permissions
+    - Look at this repository and write a three-line summary of what it contains to /workspace/claude-output.md.
+  env:
+    - name: ANTHROPIC_API_KEY
+      value: placeholder   # replaced with the real key by the claude-code Gateway
+  workspace: { name: hello-repo }
+  gateway: { name: claude-code }
+  debug: true
