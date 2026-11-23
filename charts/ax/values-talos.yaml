@@ -48,3 +48,13 @@ networkPolicy:
 registry:
   password: ""
 imagePullSecrets: []
+
+# Anthropic key for Claude Code Gateways, from the same 1Password "agents" item
+# the agents namespace uses. Gateway credentialUri:
+#   ate-secret://k8s.io/default/ax-system/anthropic-creds/api-key
+credentials:
+  - name: anthropic-creds
+    data:
+      - secretKey: api-key
+        item: agents
+        property: ANTHROPIC_API_KEY

@@ -145,6 +145,11 @@ externalSecret:
     creationPolicy: Owner
     deletionPolicy: Retain
 
+# -- Extra provider keys for Gateway credential injection; see
+# templates/external-secret-credentials.yaml. Each: name, namespace (default:
+# release namespace), data: [{secretKey, item, property}] (1Password).
+credentials: []
+
 # -- ghcr.io/yurifrl/ax/* is public: no pull Secret, no imagePullSecrets.
 # registry.* only builds one when a private registry needs it.
 registry:
