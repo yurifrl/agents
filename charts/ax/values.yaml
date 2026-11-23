@@ -101,6 +101,9 @@ networkPolicy:
   # Istio ambient delivers meshed traffic (e.g. the ingress gateway) on the
   # HBONE port 15008, which a port-scoped NetworkPolicy would otherwise drop.
   extraIngressPorts: []
+  # -- Source CIDRs admitted on :8080 for kubelet health probes. Istio ambient
+  # SNATs probes to 169.254.7.127, which a pod-selector policy drops.
+  probeSourceCIDRs: []
 
 otel:
   # -- ax-otel-config ConfigMap (envFrom). Upstream default: no OTLP export,

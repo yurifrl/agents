@@ -253,4 +253,15 @@ spec:
           podSelector:
             matchLabels:
               app: atenet-egress
+    {{- with .Values.networkPolicy.probeSourceCIDRs }}
+    # kubelet health probes, which a mesh may SNAT to a fixed address.
+    - ports:
+        - protocol: TCP
+          port: 8080
+      from:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+    {{- end }}
 {{- end }}
